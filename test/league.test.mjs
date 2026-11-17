@@ -39,6 +39,17 @@ await ok(B.act('pool+', { items: [{ id: rid(), name: 'Zed' }] }));
 await bad(B.act('pool+', { items: [{ id: rid(), name: 'zed' }] }), /duplicate/i);
 await bad(B.act('draft.start', { order: A.state.members.map((m) => m.pk) }), /commissioner/);
 await until(() => A.state.pool.size === 15, 'pool sync');
+await ok(A.act('settings', { settings: { period: 'Episode', draftNote: 'Thursday 8pm' } }));
+await bad(B.act('stat', { eid: 'e0', cat: 'a' }), /Scoring opens/);
+await ok(A.act('settings', { settings: { period: 'Week' } }));
+
+// draft order can be revealed before the draft, and follows joins/leaves
+await bad(B.act('draft.order', { order: [B.me.pk, A.me.pk, C.me.pk] }), /commissioner/);
+await ok(A.act('draft.order', { order: [C.me.pk, B.me.pk, A.me.pk] }));
+await until(() => B.state.preorder && B.state.preorder[0] === C.me.pk, 'preorder sync');
+const X = await open('Xavi'); X.login('Xavi', 'xavi-pin'); await ok(X.act('join', { name: 'Xavi' }));
+await until(() => A.state.preorder.length === 4, 'joiner appended to order');
+await ok(X.act('leave')); await until(() => A.state.preorder.length === 3 && A.state.members.length === 3, 'leaver removed'); X.close();
 
 // snake draft
 const order = [A.me.pk, B.me.pk, C.me.pk];
@@ -59,7 +70,7 @@ assert.deepEqual(A.state.rosters[A.me.pk], ['e0', 'e5', 'e6']);
 assert.deepEqual(A.state.lineups[A.me.pk], ['e0', 'e5']);
 
 // preseason: lineups, no scoring yet
-await bad(B.act('stat', { eid: 'e0', cat: 'a' }), /Round 1/);
+await bad(B.act('stat', { eid: 'e0', cat: 'a' }), /Week 1/);
 await ok(A.act('lineup', { starters: ['e6', 'e0'] }));
 await bad(A.act('lineup', { starters: ['e1'] }), /Invalid/);
 await ok(A.act('advance', { n: 1 }));

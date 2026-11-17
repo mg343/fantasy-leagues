@@ -22,6 +22,7 @@ export const TEMPLATES = [
   },
   {
     id: 'reality', emoji: '🌹', title: 'Reality TV', blurb: 'Bachelor, Survivor, Love Island — any cast.',
+    period: 'Episode',
     suggest: 'Not Here To Make Friends', poolHint: 'This season’s cast…',
     cats: [c('Survives the episode', 5), c('Wins a challenge', 8), c('Starts drama', 3), c('Cries on camera', 2), c('Kiss', 4),
       c('“I’m not here to make friends”', 6), c('Eliminated', -5), c('Leaves voluntarily', -8)],

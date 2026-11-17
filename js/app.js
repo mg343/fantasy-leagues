@@ -40,9 +40,9 @@ function Home() {
       <div><p><b>Someone starts a league</b><span>They’re the commissioner. They pick what’s being drafted (the “player pool”) and what earns points.</span></p></div>
       <div><p><b>Friends join with a link</b><span>Each friend is a manager with their own team. Type a name and a PIN — that’s the whole sign-up.</span></p></div>
       <div><p><b>You draft</b><span>Take turns picking players in a snake draft (1→8, then 8→1). Once someone’s taken, they’re off the board.</span></p></div>
-      <div><p><b>Set a lineup</b><span>Each round you choose starters. Only starters score — your bench is insurance. Lineups lock when the round starts.</span></p></div>
+      <div><p><b>Set a lineup</b><span>Each week you choose starters. Only starters score — your bench is insurance. Lineups lock when the week starts.</span></p></div>
       <div><p><b>Real life happens, points get logged</b><span>Your player aces the exam, lands the scoop, cries on camera? Anyone logs it, the commissioner can strike bad calls.</span></p></div>
-      <div><p><b>Win your matchup</b><span>Head-to-head each round, or one big points race. Work the free agents and trade your way to the title. Last place suffers the punishment.</span></p></div>
+      <div><p><b>Win your matchup</b><span>Head-to-head every week, or one big points race. Work the free agents and trade your way to the title. Last place suffers the punishment.</span></p></div>
     </div></div>
     <p class="small muted center" style="margin-top:26px">No accounts and no Anyleague server: each league is end-to-end encrypted with a key that lives only in its invite link. Anyone with the link can view and join, so share it like a group chat invite.</p>
   </div>`;
@@ -62,7 +62,7 @@ function Create({ tid }) {
     try {
       const lg = await createLeague({
         name: name.trim() || tpl.suggest || 'Untitled League', emoji: tpl.emoji, me: me.trim(), pin,
-        cats: tpl.cats.map((c) => ({ id: rid(), ...c })), pool: [],
+        cats: tpl.cats.map((c) => ({ id: rid(), ...c })), pool: [], settings: { period: tpl.period || 'Week' },
       });
       const code = lg.code; lg.close(); go('l/' + code);
     } catch (err) { toast(String(err.message || err), 'err'); setBusy(false); }

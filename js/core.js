@@ -5,8 +5,9 @@
 export const LIMITS = { members: 20, pool: 600, cats: 40 };
 export const DEFAULT_SETTINGS = {
   rosterSize: 4, starters: 3, format: 'h2h', numRounds: 4,
-  whoScores: 'all', openPool: true, pickSecs: 0, punishment: '',
+  whoScores: 'all', openPool: true, pickSecs: 0, punishment: '', period: 'Week', draftNote: '',
 };
+export const PERIODS = ['Week', 'Episode', 'Round', 'Day'];
 
 export const normName = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const str = (x, max) => (typeof x === 'string' ? x : '').trim().slice(0, max);
@@ -27,6 +28,8 @@ function cleanSettings(p, base) {
   if ('openPool' in p) s.openPool = !!p.openPool;
   if ('pickSecs' in p) s.pickSecs = int(p.pickSecs, 0, 604800, s.pickSecs);
   if ('punishment' in p) s.punishment = str(p.punishment, 200);
+  if (PERIODS.includes(p.period)) s.period = p.period;
+  if ('draftNote' in p) s.draftNote = str(p.draftNote, 80);
   s.starters = Math.min(s.starters, s.rosterSize);
   return s;
 }
@@ -58,7 +61,7 @@ function fresh() {
     phase: 'setup', members: [], pool: new Map(), cats: [],
     draft: { order: [], picks: [], at: 0 },
     rosters: {}, owner: {}, lineups: {}, locked: {}, round: 0,
-    stats: [], trades: [], feed: [], createdAt: 0, endedAt: 0,
+    stats: [], trades: [], feed: [], createdAt: 0, endedAt: 0, preorder: null,
   };
 }
 
@@ -152,6 +155,7 @@ const H = {
     if (st.members.some((m) => normName(m.name) === normName(name))) return 'That name is taken';
     if (st.members.length >= LIMITS.members) return 'League is full';
     st.members.push({ pk: ev.pk, name, team: str(p.team, 32) || `Team ${name}` });
+    if (st.preorder) st.preorder.push(ev.pk);
     say(st, ev, '👋', `${name} joined the league`);
   },
   leave(st, ev) {
@@ -160,6 +164,7 @@ const H = {
     if (!member(st, ev.pk)) return 'Not a member';
     say(st, ev, '🚪', `${who(st, ev.pk)} left the league`);
     st.members = st.members.filter((m) => m.pk !== ev.pk);
+    if (st.preorder) st.preorder = st.preorder.filter((k) => k !== ev.pk);
   },
   kick(st, ev, p) {
     if (ev.pk !== st.commish) return 'Only the commissioner can remove managers';
@@ -167,6 +172,7 @@ const H = {
     if (p.pk === st.commish || !member(st, p.pk)) return 'Cannot remove';
     say(st, ev, '🥾', `${who(st, p.pk)} was removed`);
     st.members = st.members.filter((m) => m.pk !== p.pk);
+    if (st.preorder) st.preorder = st.preorder.filter((k) => k !== p.pk);
   },
   profile(st, ev, p) {
     const m = member(st, ev.pk);
@@ -174,6 +180,14 @@ const H = {
     const team = str(p.team, 32);
     if (!team) return 'Team name required';
     m.team = team;
+  },
+  'draft.order'(st, ev, p) {
+    if (ev.pk !== st.commish) return 'Only the commissioner can set the draft order';
+    if (st.phase !== 'setup') return 'Draft already started';
+    const order = Array.isArray(p.order) ? p.order : [], pks = st.members.map((m) => m.pk);
+    if (order.length !== pks.length || new Set(order).size !== order.length || !order.every((k) => pks.includes(k))) return 'Managers changed — try again';
+    st.preorder = order.slice();
+    say(st, ev, '🎲', `Draft order is set — ${who(st, order[0])} picks first`);
   },
   'draft.start'(st, ev, p) {
     if (ev.pk !== st.commish) return 'Only the commissioner can start the draft';
@@ -201,6 +215,7 @@ const H = {
     st.rosters[slot.pk].push(e.id); st.owner[e.id] = slot.pk;
     const tag = p.auto ? ' (auto)' : ev.pk !== slot.pk ? ' (by commish)' : '';
     say(st, ev, '📝', `${who(st, slot.pk)} drafted ${e.name}${tag} — R${slot.round} P${slot.pick}`);
+    st.feed[st.feed.length - 1].minor = true;
     if (!draftSlot(st)) {
       st.phase = 'season'; st.round = 0;
       for (const k of st.draft.order) fixLineup(st, k);
@@ -225,9 +240,9 @@ const H = {
     st.lineups[pk] = s.slice(); fixLineup(st, pk);
   },
   advance(st, ev, p) {
-    if (ev.pk !== st.commish) return 'Only the commissioner can advance the round';
+    if (ev.pk !== st.commish) return `Only the commissioner can advance the ${st.settings.period.toLowerCase()}`;
     if (st.phase !== 'season') return 'Season is not live';
-    if (p.n !== st.round + 1) return 'Round already advanced';
+    if (p.n !== st.round + 1) return 'Already advanced';
     if (p.n > st.settings.numRounds) {
       st.phase = 'done'; st.endedAt = ev.at;
       const top = standings(st)[0];
@@ -236,7 +251,7 @@ const H = {
     }
     st.round = p.n; st.locked[p.n] = {};
     for (const k of st.draft.order) { fixLineup(st, k); st.locked[p.n][k] = st.lineups[k].slice(); }
-    say(st, ev, '📣', `Round ${p.n} is live — lineups are locked`);
+    say(st, ev, '📣', `${st.settings.period} ${p.n} is live — lineups are locked`);
   },
   adddrop(st, ev, p) {
     if (st.phase !== 'season') return 'Rosters are locked';
@@ -288,7 +303,7 @@ const H = {
   },
   stat(st, ev, p) {
     if (st.phase !== 'season' && st.phase !== 'done') return 'Scoring opens when the season starts';
-    if (st.round < 1) return 'Scoring opens when Round 1 starts';
+    if (st.round < 1) return `Scoring opens when ${st.settings.period} 1 starts`;
     const isC = ev.pk === st.commish;
     if (!isC && !(st.settings.whoScores === 'all' && member(st, ev.pk))) return 'Only the commissioner can log scores';
     if (st.phase === 'done' && !isC) return 'Season is over';
