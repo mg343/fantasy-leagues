@@ -61,6 +61,10 @@ function addPool(st, items) {
 // "Draft each other" leagues: every manager is also a draftable player.
 export const selfId = (pk) => '@' + pk.slice(0, 14);
 export const isSolo = (st) => st.settings.mode === 'solo';
+// Points race: one long race, no weeks or lineups. Points go to whoever owns the player when it happens.
+export const isRace = (st) => st.settings.format === 'points';
+// A week's matchups are frozen when it starts, so people joining later never rewrite past results.
+export const pairsFor = (st, r) => (st.pairs && st.pairs[r]) || matchups(st.draft.order, r);
 function syncSelf(st) {
   const want = new Map(st.settings.selfDraft || isSolo(st) ? st.members.map((m) => [selfId(m.pk), m]) : []);
   for (const e of [...st.pool.values()]) if (e.self && !want.has(e.id)) st.pool.delete(e.id);
@@ -79,7 +83,7 @@ function fresh() {
     phase: 'setup', members: [], pool: new Map(), cats: [],
     draft: { order: [], picks: [], at: 0 },
     rosters: {}, owner: {}, lineups: {}, locked: {}, round: 0,
-    stats: [], trades: [], feed: [], createdAt: 0, endedAt: 0, preorder: null,
+    stats: [], trades: [], feed: [], createdAt: 0, endedAt: 0, preorder: null, pairs: {},
   };
 }
 
@@ -173,7 +177,8 @@ const H = {
     if (typeof p.note === 'string') e.note = str(p.note, 80);
   },
   join(st, ev, p) {
-    if (st.phase !== 'setup') return 'The draft already started — joining is closed';
+    if (st.phase === 'draft') return 'The draft is happening — join once it’s done';
+    if (st.phase === 'done') return 'The season is over';
     if (member(st, ev.pk)) return 'Already in';
     const name = str(p.name, 24);
     if (!name) return 'Name required';
@@ -182,6 +187,16 @@ const H = {
     st.members.push({ pk: ev.pk, name, team: str(p.team, 32) || `Team ${name}` });
     if (st.preorder) st.preorder.push(ev.pk);
     syncSelf(st);
+    if (st.phase === 'season') {
+      // Late joiner: starts at 0. In "we do" leagues they play as themselves right away;
+      // in draft leagues they build a team from free agents.
+      st.draft.order.push(ev.pk); st.rosters[ev.pk] = [];
+      if (isSolo(st)) {
+        const id = selfId(ev.pk);
+        st.rosters[ev.pk] = [id]; st.owner[id] = ev.pk; st.lineups[ev.pk] = [id];
+        if (st.round >= 1) st.locked[st.round][ev.pk] = [id];
+      } else st.lineups[ev.pk] = [];
+    }
     say(st, ev, '👋', `${name} joined the league`);
   },
   leave(st, ev) {
@@ -220,7 +235,7 @@ const H = {
   'draft.start'(st, ev, p) {
     if (ev.pk !== st.commish) return 'Only the commissioner can start the draft';
     if (st.phase !== 'setup') return 'Draft already started';
-    if (st.members.length < 2) return 'Need at least 2 managers';
+    if (st.members.length < (isSolo(st) ? 1 : 2)) return 'The draft needs at least 2 people';
     const order = Array.isArray(p.order) ? p.order : [];
     const pks = st.members.map((m) => m.pk);
     if (order.length !== pks.length || new Set(order).size !== order.length || !order.every((k) => pks.includes(k))) return 'Managers changed — try again';
@@ -229,15 +244,16 @@ const H = {
       for (const e of [...st.pool.values()]) if (!e.self) st.pool.delete(e.id);
       syncSelf(st);
       st.settings.rosterSize = 1; st.settings.starters = 1;
-      st.phase = 'season'; st.draft = { order, picks: [], at: ev.at }; st.round = 1; st.locked[1] = {};
-      for (const k of order) { const id = selfId(k); st.rosters[k] = [id]; st.owner[id] = k; st.lineups[k] = [id]; st.locked[1][k] = [id]; }
-      say(st, ev, '📣', `The season is on — ${st.settings.period} 1 is live`);
+      st.phase = 'season'; st.draft = { order: order.slice(), picks: [], at: ev.at };
+      for (const k of order) { const id = selfId(k); st.rosters[k] = [id]; st.owner[id] = k; st.lineups[k] = [id]; }
+      beginWeek(st, 1);
+      say(st, ev, '📣', isRace(st) ? 'The season is on!' : `The season is on — ${st.settings.period} 1 is live`);
       return;
     }
     const fit = fitRoster(st);
     if (fit < 1) return `Need at least ${pks.length} names to draft — one per manager`;
     st.settings.rosterSize = fit; st.settings.starters = Math.min(st.settings.starters, fit);
-    st.phase = 'draft'; st.draft = { order, picks: [], at: ev.at };
+    st.phase = 'draft'; st.draft = { order: order.slice(), picks: [], at: ev.at };
     for (const k of pks) st.rosters[k] = [];
     say(st, ev, '🚨', `The draft is live! ${who(st, order[0])} is on the clock`);
   },
@@ -259,7 +275,8 @@ const H = {
     if (!draftSlot(st)) {
       st.phase = 'season'; st.round = 0;
       for (const k of st.draft.order) fixLineup(st, k);
-      say(st, ev, '✅', 'Draft complete. Set your lineups!');
+      if (isRace(st)) { beginWeek(st, 1); say(st, ev, '✅', 'Draft complete. The race is on!'); }
+      else say(st, ev, '✅', 'Draft complete. Set your lineups!');
     }
   },
   'draft.undo'(st, ev) {
@@ -283,14 +300,13 @@ const H = {
     if (ev.pk !== st.commish) return `Only the commissioner can advance the ${st.settings.period.toLowerCase()}`;
     if (st.phase !== 'season') return 'Season is not live';
     if (p.n !== st.round + 1) return 'Already advanced';
-    if (p.n > st.settings.numRounds) {
+    if (p.n > st.settings.numRounds || (isRace(st) && st.round >= 1)) {
       st.phase = 'done'; st.endedAt = ev.at;
       const top = standings(st)[0];
       say(st, ev, '🏆', `Season over! ${who(st, top.pk)} takes the title`);
       return;
     }
-    st.round = p.n; st.locked[p.n] = {};
-    for (const k of st.draft.order) { fixLineup(st, k); st.locked[p.n][k] = st.lineups[k].slice(); }
+    beginWeek(st, p.n);
     say(st, ev, '📣', `${st.settings.period} ${p.n} is live — lineups are locked`);
   },
   adddrop(st, ev, p) {
@@ -359,7 +375,7 @@ const H = {
     }
     const round = isC && Number.isInteger(p.round) && p.round >= 1 && p.round <= st.round ? p.round : st.round;
     const pts = r1(each * qty);
-    st.stats.push({ id: ev.id, eid: e.id, label, qty, pts, note: str(p.note, 140), round, by: ev.pk, at: ev.at, void: false });
+    st.stats.push({ id: ev.id, eid: e.id, team: st.owner[e.id] || null, label, qty, pts, note: str(p.note, 140), round, by: ev.pk, at: ev.at, void: false });
     st.feed.push({ id: ev.id, at: ev.at, k: 'stat', pk: ev.pk, eid: e.id, pts, round,
       text: `${e.name}: ${label}${qty > 1 ? ' ×' + qty : ''}`, note: str(p.note, 140) });
   },
@@ -420,6 +436,14 @@ export function scores(st) {
     const e = ent[s.eid] || (ent[s.eid] = { total: 0, r: {} });
     e.total = r1(e.total + s.pts); e.r[s.round] = r1((e.r[s.round] || 0) + s.pts);
   }
+  if (isRace(st)) {
+    for (const pk of st.draft.order) team[pk] = { total: 0, r: {} };
+    for (const s of st.stats) {
+      if (s.void || !s.team || !team[s.team] || !st.pool.has(s.eid)) continue;
+      const t = team[s.team]; t.total = r1(t.total + s.pts); t.r[1] = t.total;
+    }
+    return { ent, team };
+  }
   for (const pk of st.draft.order) {
     team[pk] = { total: 0, r: {} };
     for (let r = 1; r <= st.round; r++) {
@@ -431,6 +455,12 @@ export function scores(st) {
   return { ent, team };
 }
 
+function beginWeek(st, n) {
+  st.round = n; st.locked[n] = {};
+  for (const k of st.draft.order) { fixLineup(st, k); st.locked[n][k] = st.lineups[k].slice(); }
+  st.pairs[n] = matchups(st.draft.order, n);
+}
+
 export const roundDone = (st, r) => r < st.round || st.phase === 'done';
 
 export function standings(st, sc = scores(st)) {
@@ -438,7 +468,7 @@ export function standings(st, sc = scores(st)) {
   const by = Object.fromEntries(rows.map((r) => [r.pk, r]));
   if (st.settings.format === 'h2h') {
     for (let r = 1; r <= st.round; r++) {
-      for (const [a, b] of matchups(st.draft.order, r)) {
+      for (const [a, b] of pairsFor(st, r)) {
         if (b === null) continue;
         const sa = sc.team[a].r[r] || 0, sb = sc.team[b].r[r] || 0;
         by[a].pa = r1(by[a].pa + sb); by[b].pa = r1(by[b].pa + sa);

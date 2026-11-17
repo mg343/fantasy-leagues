@@ -1,6 +1,6 @@
 import { html, useState, useEffect, useRef, useNow, go, toast, ask, parseNames, ago, assignEmoji, Av, Ini, Pts, num, sgn, plural, Sheet, Seg, Step, copy, leagueUrl } from './ui.js';
 import { League, rid, validPin, PIN_MIN } from './net.js';
-import { scores, standings, matchups, draftSlot, clockStart, available, roundDone, normName, PERIODS, fitRoster, isSolo, selfId } from './core.js';
+import { scores, standings, matchups, draftSlot, clockStart, available, roundDone, normName, PERIODS, fitRoster, isSolo, isRace, pairsFor, selfId } from './core.js';
 
 // ---------------------------------------------------------------- plumbing
 function useLeague(code) {
@@ -50,7 +50,7 @@ export function LeaguePage({ code, tab }) {
   const name = (pk) => (st.members.find((m) => m.pk === pk) || {}).name || '—';
   const team = (pk) => (st.members.find((m) => m.pk === pk) || {}).team || '—';
   const P = st.settings.period || 'Week';
-  const x = { lg, st, sc, mem, isC, run, me: mem ? mem.pk : null, open: setSheet, canScore, name, team, code, P, p: P.toLowerCase(), solo };
+  const x = { lg, st, sc, mem, isC, run, me: mem ? mem.pk : null, open: setSheet, canScore, name, team, code, P, p: P.toLowerCase(), solo, race: isRace(st) };
 
   const seenKey = 'al:seen:' + code;
   const chatN = st.feed.filter((f) => f.k === 'chat' && f.pk !== x.me).length;
@@ -63,7 +63,8 @@ export function LeaguePage({ code, tab }) {
     : st.phase === 'draft' ? html`<span class="pill live"><span class="dot pulse" style="background:#17140F"></span>Draft live</span>`
       : st.phase === 'done' ? html`<span class="pill dark">Final</span>`
         : st.round === 0 ? html`<span class="pill yel">Preseason</span>`
-          : html`<span class="pill live">${P} ${st.round} of ${st.settings.numRounds}</span>`;
+          : isRace(st) ? html`<span class="pill live">Season live</span>`
+            : html`<span class="pill live">${P} ${st.round} of ${st.settings.numRounds}</span>`;
   const on = lg.online;
 
   return html`<div class="wrap">
@@ -105,7 +106,7 @@ function WhoAreYou({ x }) {
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
   const pinRef = useRef(null);
-  const setup = st.phase === 'setup';
+  const setup = st.phase === 'setup' || st.phase === 'season'; // can join
   const known = !!lg.memberFor(name);
   const enter = async (e) => {
     e.preventDefault();
@@ -115,21 +116,21 @@ function WhoAreYou({ x }) {
     const r = lg.login(n, pin);
     if (r === 'taken') return toast('Wrong PIN for that name', 'err');
     if (r === 'member') return toast(`Welcome back, ${lg.member.name}`);
-    if (!setup) { lg.logout(); return toast('No manager by that name — the draft already happened', 'err'); }
+    if (!setup) { lg.logout(); return toast(st.phase === 'draft' ? 'The draft is happening — join once it’s done' : 'The season is over — joining is closed', 'err'); }
     setBusy(true);
     const j = await lg.act('join', { name: n });
     setBusy(false);
-    if (j.err) { lg.logout(); toast(j.err, 'err'); } else toast('You’re in! 🎉');
+    if (j.err) { lg.logout(); toast(j.err, 'err'); } else toast(st.phase === 'season' && !x.solo ? 'You’re in! Grab free agents in Players to build your team.' : 'You’re in! 🎉');
   };
   return html`<div class="card yellow" style="margin-bottom:16px">
     <h3>${setup ? '👋 You’re invited' : 'Who are you?'}</h3>
-    ${setup && html`<p style="margin-bottom:10px">Join <b>${st.name}</b>. No account — just a name and a PIN.</p>`}
+    ${setup && html`<p style="margin-bottom:10px">Join <b>${st.name}</b>. No account — just a name and a PIN.${st.phase === 'season' ? (x.solo ? ' The season’s already going; you start at 0.' : ' The draft’s done; you’ll build your team from free agents.') : ''}</p>`}
     <form class="row wrapx" onSubmit=${enter}>
       <input class="in grow" style="min-width:150px" maxlength="24" placeholder="Your name" aria-label="Your name" autocomplete="nickname" value=${name} onInput=${(e) => setName(e.target.value)} />
       <input class="in" style="width:120px" type="password" maxlength="32" placeholder="PIN" aria-label="PIN" autocomplete="off" ref=${pinRef} value=${pin} onInput=${(e) => setPin(e.target.value)} />
       <button class="btn dark" disabled=${busy}>${setup && !known ? 'Join league' : 'Sign in'}</button>
     </form>
-    <p class="small" style="margin-top:8px">${known ? 'Enter the PIN you chose when you joined.' : setup ? `New here? Choose a PIN (${PIN_MIN}+ characters). You’ll need it to sign in again.` : 'Managers sign in with their name and PIN. Everyone else can watch.'}</p>
+    <p class="small" style="margin-top:8px">${known ? 'Enter the PIN you chose when you joined.' : setup ? `New here? Choose a PIN (${PIN_MIN}+ characters). You’ll need it to sign in again.` : (st.phase === 'draft' ? 'The draft is on — you can join once it’s done. ' : 'Joining is closed. ') + 'Players sign in with their name and PIN.'}</p>
     ${st.members.length > 0 && html`<p class="small" style="margin:10px 0 6px">${setup ? 'Already joined? Tap your name, then enter your PIN:' : 'Tap your name, then enter your PIN:'}</p>
       <div class="chips">${st.members.map((m) => html`<button type="button" class="chip ${normName(m.name) === normName(name) ? 'on' : ''}" onClick=${() => { setName(m.name); setPin(''); if (pinRef.current) pinRef.current.focus(); }}><${Av} pk=${m.pk} size="sm" />${m.name}</button>`)}</div>`}
   </div>`;
@@ -162,7 +163,7 @@ function Lobby({ x }) {
   const need = st.members.length * st.settings.rosterSize;
   const fit = fitRoster(st), set = st.settings, h2h = set.format === 'h2h';
   const checks = [
-    [st.members.length >= 2, `${plural(st.members.length, 'person')} in the league`.replace('persons', 'people'), 'at least 2 people'],
+    [st.members.length >= (solo ? 1 : 2), solo && st.members.length < 2 ? 'Just you so far — friends can join any time, even mid-season' : `${plural(st.members.length, 'person')} in the league`.replace('persons', 'people'), 'at least 2 people for the draft'],
     ...(solo ? [] : [[fit >= 1, fit >= 1 ? `${plural(st.pool.size, 'name')} to draft → teams of ${fit}` : `${plural(st.pool.size, 'name')} to draft`, 'at least one name to draft per person']]),
     [st.cats.length > 0, `${plural(st.cats.length, 'scoring rule')}`, 'at least one scoring rule'],
   ];
@@ -175,24 +176,25 @@ function Lobby({ x }) {
   };
   const start = async () => {
     const ok = solo
-      ? await ask('Start the season?', `Joining closes and ${P} 1 starts now. ${st.members.length} people, ${plural(set.numRounds, p)}.`, 'Start season')
-      : await ask('Start the draft?', `Joining closes. ${order ? `${name(order[0])} picks first.` : 'The draft order will be randomized.'} ${st.members.length} people, ${fit} ${fit === 1 ? 'pick' : 'picks'} each.`, 'Start draft');
+      ? await ask('Start the season?', `Scoring opens now${x.race ? '' : ` with ${P} 1`}. Friends can still join with the link and start at 0.`, 'Start season')
+      : await ask('Start the draft?', `Anyone who joins after this builds a team from free agents. ${order ? `${name(order[0])} picks first.` : 'The draft order will be randomized.'} ${st.members.length} people, ${fit} ${fit === 1 ? 'pick' : 'picks'} each.`, 'Start draft');
     if (ok) run('draft.start', { order: order || shuffle() });
   };
   const list = order ? order.map((pk) => st.members.find((m) => m.pk === pk)) : st.members;
   const startBtn = html`<button class="btn pri big" disabled=${problems.length > 0} onClick=${start}>${solo ? '▶️ Start the season' : '🚨 Start the draft'}</button>`;
   const c0 = st.cats[0], ex = c0 ? `“${c0.name}” (${sgn(c0.pts)})` : 'something on the scoring list';
-  const wk = h2h ? `Each ${p}, everyone is matched against one other person. Higher score wins the ${p}.` : `No matchups — it’s a race for the most points over ${plural(set.numRounds, p)}.`;
+  const wk = h2h ? `Each ${p}, everyone is matched against one other person. Higher score wins the ${p}.` : 'No weeks, no matchups — one long race for the most points.';
+  const end = h2h ? `After ${plural(set.numRounds, p)} the best record wins.` : 'When the commissioner ends the season, most points wins.';
   const steps = solo ? [
-    ['Everyone joins with the link below.', st.members.length > 1 ? `${st.members.length} in so far.` : 'Send it to the group chat.'],
+    ['Send the link below to your friends.', `${st.members.length > 1 ? `${st.members.length} in so far. ` : ''}You can start now — people can join any time and start at 0.`],
     ['Do things, log points.', `When someone does ${ex}, anyone taps “Log points”, picks the person and what they did.`],
     [h2h ? `Win your ${p}.` : 'Climb the standings.', wk],
-    ['Crown a champion.', `After ${plural(set.numRounds, p)} the best ${h2h ? 'record' : 'score'} wins.${set.punishment ? ` Last place: ${set.punishment}.` : ''}`],
+    ['Crown a champion.', `${end}${set.punishment ? ` Last place: ${set.punishment}.` : ''}`],
   ] : [
     ['Build the list of who can be drafted.', `${plural(st.pool.size, 'name')} so far${st.hint ? ` — ${st.hint.replace(/…$/, '').toLowerCase()}` : ''}. Aim for 3–4 per person playing.`],
     ['Everyone joins, then you draft.', `Take turns claiming names until each of you has a team${fit >= 1 ? ` of ${fit}` : ''}. Once a name is taken, it’s that person’s alone.`],
     ['Your team does things, you score.', `When someone you drafted does ${ex}, anyone logs it and the points go to you${set.starters < set.rosterSize ? ' (if you’re starting them)' : ''}.`],
-    [h2h ? `Win your ${p}, win the league.` : 'Climb the standings.', `${wk} After ${plural(set.numRounds, p)}, best ${h2h ? 'record' : 'score'} is champion.`],
+    [h2h ? `Win your ${p}, win the league.` : 'Climb the standings.', `${wk} ${end}`],
   ];
   return html`<div>
     ${isC && html`<div class="card" style="margin-bottom:14px"><h3>${solo ? 'Before you start' : 'Before you draft'}</h3>
@@ -205,7 +207,7 @@ function Lobby({ x }) {
     <div class="card" style="margin-bottom:14px"><h3>How this league works</h3><div class="how">${steps.map(([b, t]) => html`<div><p><b>${b}</b><span>${t}</span></p></div>`)}</div></div>
 
     <div class="card"><h3>Invite your friends</h3><${LinkBox} code=${code} />
-      <p class="small muted" style="margin-top:8px">Anyone with this link can join until the ${solo ? 'season' : 'draft'} starts.</p></div>
+      <p class="small muted" style="margin-top:8px">${solo ? 'Anyone with this link can join, now or after the season starts.' : 'Anyone with this link can join. People who join after the draft build a team from free agents.'}</p></div>
 
     <div class="sec">${solo ? 'Who’s playing' : 'Who’s in'} <span class="n">${st.members.length}</span>${order && html`<span class="tiny muted" style="text-transform:none;letter-spacing:0">in draft order</span>`}</div>
     <div class="list">${list.map((m, i) => html`<div class="li ${m.pk === me ? 'me' : ''}" key=${m.pk}>
@@ -290,20 +292,20 @@ function Settings({ x }) {
     return html`<div class="card"><div class="chips">
       <span class="chip">${solo ? '🙋 You score for yourselves' : '📋 Drafted teams'}</span>
       <span class="chip">${s.format === 'h2h' ? '⚔️ Head-to-head' : '🏁 Points race'}</span>${!solo && html`<span class="chip">🧢 ${s.rosterSize} per team</span>
-      <span class="chip">▶️ ${s.starters} start</span>`}<span class="chip">🗓️ ${plural(s.numRounds, p)}</span>
+      ${!x.race && html`<span class="chip">▶️ ${s.starters} start</span>`}`}${x.race ? html`<span class="chip">🏁 Ends when the commissioner says</span>` : html`<span class="chip">🗓️ ${plural(s.numRounds, p)}</span>`}
       <span class="chip">✍️ ${s.whoScores === 'all' ? 'Anyone logs points' : 'Commish logs points'}</span>
       ${s.pickSecs > 0 && html`<span class="chip">⏱️ ${fmtSecs(s.pickSecs)} per pick</span>`}
       ${s.punishment && html`<span class="chip">💀 Last place: ${s.punishment}</span>`}</div></div>`;
   }
   return html`<div class="card"><h3>League rules</h3>
-    ${row('Format', odd ? `Odd number of managers: one sits out each ${p}. Points race avoids that.` : s.format === 'h2h' ? `Face a different manager every ${p}. Best record wins.` : 'No matchups — most total points wins.',
+    ${row('Format', odd ? `Odd number of people: one sits out each ${p}. Points race avoids that.` : s.format === 'h2h' ? `Face a different person every ${p}. Best record wins.` : 'One long race — no weeks, no matchups. You end the season whenever; most points wins.',
     html`<${Seg} value=${s.format} disabled=${!pre} options=${[['h2h', 'Head-to-head'], ['points', 'Points race']]} onChange=${(v) => set({ format: v })} />`)}
     ${row('League type', solo ? 'Everyone scores for what they do. No draft.' : 'Each of you drafts a team from a list.', html`<span class="pill dark">${solo ? '🙋 We score' : '📋 Drafted teams'}</span>`)}
     ${!solo && row(pre ? 'Team size (max)' : 'Team size', pre ? 'Names per team. Shrinks to fit if the list is short.' : 'Names per team.', html`<${Step} value=${s.rosterSize} min=${1} max=${15} disabled=${!pre} onChange=${(v) => set({ rosterSize: v })} />`)}
-    ${!solo && row('Starters', s.starters < s.rosterSize ? `Only starters score. ${s.rosterSize - s.starters} on the bench.` : 'Everyone starts — no bench.', html`<${Step} value=${s.starters} min=${1} max=${s.rosterSize} disabled=${!pre} onChange=${(v) => set({ starters: v })} />`)}
-    ${row('Scoring period', `What one stretch of the season is called. You start and end each ${p} by hand, so it can be any length.`,
+    ${!solo && !x.race && row('Starters', s.starters < s.rosterSize ? `Only starters score. ${s.rosterSize - s.starters} on the bench.` : 'Everyone starts — no bench.', html`<${Step} value=${s.starters} min=${1} max=${s.rosterSize} disabled=${!pre} onChange=${(v) => set({ starters: v })} />`)}
+    ${!x.race && row('Scoring period', `What one stretch of the season is called. You start and end each ${p} by hand, so it can be any length.`,
     html`<select class="in" style="width:auto" aria-label="Scoring period" value=${P} onChange=${(e) => set({ period: e.target.value })}>${PERIODS.map((v) => html`<option value=${v}>${v}</option>`)}</select>`)}
-    ${row('Season length', `How many ${p}s you play.`, html`<${Step} value=${s.numRounds} min=${Math.max(1, st.round)} max=${52} disabled=${st.phase === 'done'} onChange=${(v) => set({ numRounds: v })} />`)}
+    ${!x.race && row('Season length', `How many ${p}s you play.`, html`<${Step} value=${s.numRounds} min=${Math.max(1, st.round)} max=${52} disabled=${st.phase === 'done'} onChange=${(v) => set({ numRounds: v })} />`)}
     ${row('Who logs points', s.whoScores === 'all' ? 'Anyone in the league. You can strike bad calls.' : 'Only you.', html`<${Seg} value=${s.whoScores} options=${[['all', 'Everyone'], ['commish', 'Just me']]} onChange=${(v) => set({ whoScores: v })} />`)}
     ${pre && !solo && row('List additions', s.openPool ? 'Anyone in the league can add names before the draft.' : 'Only you can add names.', html`<${Seg} value=${s.openPool ? 'y' : 'n'} options=${[['y', 'Everyone'], ['n', 'Just me']]} onChange=${(v) => set({ openPool: v === 'y' })} />`)}
     ${!solo && st.phase !== 'season' && st.phase !== 'done' && row('Pick timer', s.pickSecs ? 'Time’s up → best available is auto-picked.' : 'No clock. Draft live or over a few days.',
@@ -406,6 +408,7 @@ function Scores({ x }) {
     if (ok) { await run('advance', { n }); setVr(null); }
   };
   const rows = standings(st, sc);
+  if (x.race && st.round >= 1) return html`<${RaceScores} x=${x} rows=${rows} />`;
   const plays = st.stats.filter((s) => s.round === r).slice().reverse();
   const mineFirst = (list) => list.slice().sort((a, b) => (b.includes(me) ? 1 : 0) - (a.includes(me) ? 1 : 0));
   return html`<div>
@@ -422,7 +425,7 @@ function Scores({ x }) {
         <div class="ttl">${P} ${r} ${live ? html`<span class="pill live"><span class="dot pulse" style="background:#17140F"></span>LIVE</span>` : html`<span class="pill dark">FINAL</span>`}</div>
         <button class="btn sm" aria-label=${'Next ' + p} disabled=${r >= st.round} onClick=${() => setVr(r + 1)}>›</button></div>
       ${h2h
-    ? html`<div class="stack">${mineFirst(matchups(st.draft.order, r)).map(([a, b]) => html`<${Matchup} x=${x} a=${a} b=${b} r=${r} key=${a + r} />`)}</div>`
+    ? html`<div class="stack">${mineFirst(pairsFor(st, r)).map(([a, b]) => html`<${Matchup} x=${x} a=${a} b=${b} r=${r} key=${a + r} />`)}</div>`
     : html`<div class="list">${st.draft.order.slice().sort((a, b) => sc.team[b].r[r] - sc.team[a].r[r]).map((pk, i) => html`<div class="li ${pk === me ? 'me' : ''}" key=${pk}>
           <span class="mono muted" style="width:18px">${i + 1}</span><${Av} pk=${pk} /><div class="grow"><div class="t ell">${team(pk)}</div><div class="s">${name(pk)}</div></div>
           <div class="num">${num(sc.team[pk].r[r])}</div></div>`)}</div>`}`}
@@ -437,6 +440,28 @@ function Scores({ x }) {
   </div>`;
 }
 
+function RaceScores({ x, rows }) {
+  const { st, sc, isC, run, me, name, team } = x;
+  const plays = st.stats.slice().reverse();
+  const end = async () => { if (await ask('End the season?', 'Final standings lock and a champion is crowned. This can’t be undone.', 'End season')) run('advance', { n: st.round + 1 }); };
+  return html`<div>
+    ${st.phase === 'done' && html`<div class="card yellow champ" style="margin-bottom:16px"><div class="cup">🏆</div>
+      <div class="tiny" style="font-weight:700;letter-spacing:.1em;margin-top:8px">CHAMPION</div><h2>${team(rows[0].pk)}</h2><p>${name(rows[0].pk)} wins ${st.name}.</p>
+      ${rows.length > 1 && html`<p class="small" style="margin-top:10px">💀 Last place: <b>${name(rows[rows.length - 1].pk)}</b>${st.settings.punishment ? ` — ${st.settings.punishment}` : ''}</p>`}</div>`}
+    <div class="rnav"><div class="ttl">The race ${st.phase === 'season' ? html`<span class="pill live"><span class="dot pulse" style="background:#17140F"></span>LIVE</span>` : html`<span class="pill dark">FINAL</span>`}</div></div>
+    <div class="list">${rows.map((r, i) => html`<div class="li ${r.pk === me ? 'me' : ''}" key=${r.pk}>
+      <span class="mono muted" style="width:18px">${i + 1}</span><${Av} pk=${r.pk} />
+      <div class="grow"><div class="t ell">${team(r.pk)}</div><div class="s">${name(r.pk)}${r.pk === me ? ' · you' : ''}${i > 0 ? ` · ${num(rows[0].pf - r.pf)} back` : rows.length > 1 ? ' · leading' : ''}</div></div>
+      <div class="num" style="font-size:20px">${num(sc.team[r.pk].total)}</div></div>`)}</div>
+    ${isC && st.phase === 'season' && html`<div class="card ink" style="margin-top:16px"><div class="row wrapx"><div class="grow" style="min-width:150px"><b>Commissioner</b>
+      <div class="small" style="opacity:.75">No weeks to manage. End the season whenever you’re done.</div></div>
+      <button class="btn yel" onClick=${end}>End season</button></div></div>`}
+    <div class="sec">Scoring plays <span class="n">${plays.filter((s) => !s.void).length}</span></div>
+    <div class="list feed">${plays.map((s) => html`<${Play} x=${x} s=${s} key=${s.id} />`)}
+    ${!plays.length && html`<div class="empty">${x.canScore ? 'Nothing logged yet. Something happen? Hit “Log points”.' : 'Nothing logged yet.'}</div>`}</div>
+  </div>`;
+}
+
 function Play({ x, s }) {
   const { st, isC, me, run, name } = x;
   const e = st.pool.get(s.eid);
@@ -444,7 +469,7 @@ function Play({ x, s }) {
   return html`<div class="it ${s.void ? 'void' : ''}"><div class="ic"><${Ini} e=${e} size="sm" /></div>
     <div class="grow tx"><b>${e ? e.name : '???'}</b> — ${s.label}${s.qty > 1 ? ` ×${s.qty}` : ''}
       ${s.note && html`<div class="small muted">“${s.note}”</div>`}
-      <div class="when">${x.solo ? '' : (own ? `counts for ${name(own[0])}` : 'not in a starting lineup') + ' · '}logged by ${name(s.by)} · ${ago(s.at)}</div></div>
+      <div class="when">${x.solo ? '' : x.race ? (s.team ? `counts for ${name(s.team)} · ` : 'free agent — counts for no one · ') : (own ? `counts for ${name(own[0])}` : 'not in a starting lineup') + ' · '}logged by ${name(s.by)} · ${ago(s.at)}</div></div>
     <${Pts} v=${s.pts} />
     ${!s.void && (isC || s.by === me) && st.phase !== 'done' && html`<button class="x" aria-label="Strike this play" title="Strike" onClick=${async () => (await ask('Strike this play?', `${e ? e.name : ''}: ${s.label} (${sgn(s.pts)}) is removed from the record.`, 'Strike it')) && run('stat.void', { id: s.id })}>✕</button>`}
   </div>`;
@@ -469,14 +494,37 @@ function Matchup({ x, a, b, r, pre }) {
 }
 
 // ---------------------------------------------------------------- team
+function RaceTeam({ x, pk, setVpk }) {
+  const { st, sc, me, name, team, open } = x;
+  const roster = st.rosters[pk] || [];
+  const forYou = (id) => st.stats.filter((s) => !s.void && s.eid === id && s.team === pk).reduce((a, s) => a + s.pts, 0);
+  const rec = standings(st, sc).find((r) => r.pk === pk);
+  return html`<div>
+    <div class="row" style="margin-bottom:12px"><${Av} pk=${pk} size="lg" />
+      <div class="grow"><div style="font-size:22px;font-weight:800;letter-spacing:-.02em;line-height:1.1" class="ell">${team(pk)}</div>
+        <div class="small muted">${name(pk)} · ${num(rec.pf)} pts · #${rec.rank}</div></div></div>
+    <select class="in" aria-label="View team" value=${pk} onChange=${(e) => setVpk(e.target.value)} style="margin-bottom:12px">
+      ${st.draft.order.map((k) => html`<option value=${k}>${team(k)} — ${name(k)}${k === me ? ' (you)' : ''}</option>`)}</select>
+    <p class="small muted" style="margin-bottom:4px">Everyone on your team scores. Points count for whoever has the player when it happens.</p>
+    <div class="sec" style="margin-top:6px">Roster <span class="n">${roster.length}/${st.settings.rosterSize}</span></div>
+    <div class="list">${roster.map((id) => { const e = st.pool.get(id); return html`<div class="li tap" key=${id} onClick=${() => open({ k: 'ent', eid: id })}><${Ini} e=${e} />
+      <div class="grow"><div class="t ell">${e ? e.name : '—'}</div><div class="s ell">${e && e.note ? e.note + ' · ' : ''}season ${num((sc.ent[id] || {}).total || 0)}</div></div>
+      <div class="num"><${Pts} v=${forYou(id)} plain /><div class="tiny muted">for you</div></div></div>`; })}
+      ${!roster.length && html`<div class="empty">No one yet. Grab free agents in <a href=${`#/l/${x.code}/players`}>Players</a>.</div>`}</div>
+    ${roster.length > 0 && roster.length < st.settings.rosterSize && st.phase === 'season' && pk === me && html`<p class="small muted" style="margin-top:10px">Open roster spot — grab a free agent in <a href=${`#/l/${x.code}/players`}>Players</a>.</p>`}
+    ${pk !== me && me && st.phase === 'season' && html`<button class="btn" style="margin-top:14px" onClick=${() => open({ k: 'trade', to: pk })}>🤝 Propose a trade with ${name(pk)}</button>`}
+  </div>`;
+}
+
 function Team({ x }) {
   const { st, sc, me, isC, run, name, team, open, P, p } = x;
   const [vpk, setVpk] = useState(me || st.draft.order[0]);
   const [swap, setSwap] = useState(null);
   const [view, setView] = useState('now');
   const pk = st.rosters[vpk] ? vpk : st.draft.order[0];
+  if (x.race) return html`<${RaceTeam} x=${x} pk=${pk} setVpk=${setVpk} />`;
   const roster = st.rosters[pk] || [], lu = st.lineups[pk] || [];
-  const hasBench = st.settings.starters < st.settings.rosterSize;
+  const hasBench = st.settings.starters < st.settings.rosterSize && !x.race;
   const started = st.round >= 1;
   const hasNext = st.phase === 'season' && st.round < st.settings.numRounds;
   // "now" = the lineup that is locked in and scoring. "next" = the one you can still change.
@@ -502,7 +550,7 @@ function Team({ x }) {
     </div>`;
   };
   const rec = standings(st, sc).find((r) => r.pk === pk);
-  const opp = st.settings.format === 'h2h' && started ? (matchups(st.draft.order, st.round).find((m) => m.includes(pk)) || []).find((k) => k !== pk) : null;
+  const opp = st.settings.format === 'h2h' && started ? (pairsFor(st, st.round).find((m) => m.includes(pk)) || []).find((k) => k !== pk) : null;
   const target = started ? st.round + 1 : 1;
   return html`<div>
     <div class="row" style="margin-bottom:12px"><${Av} pk=${pk} size="lg" />
@@ -515,7 +563,7 @@ function Team({ x }) {
     ${now && st.phase === 'season' && html`<p class="small muted" style="margin-bottom:4px">🔒 Locked when ${P} ${st.round} started.${hasNext && hasBench && (pk === me || isC) ? html` <a href="#" onClick=${(e) => { e.preventDefault(); setView('next'); }}>Set your ${P} ${st.round + 1} lineup</a>.` : ''}</p>`}
     ${!now && st.phase === 'season' && hasBench && html`<p class="small muted" style="margin-bottom:4px">${pk === me ? `Choose who starts in ${P} ${target}.` : `${name(pk)}’s plan for ${P} ${target}.`} It locks when the commissioner starts that ${p}.</p>`}
     <div class="sec" style="margin-top:6px">${hasBench || now ? 'Starters' : 'Roster'} <span class="n">${starters.length}</span></div>
-    <div class="list">${starters.map((id) => row(id, true))}${!starters.length && html`<div class="empty">Nobody starting.</div>`}</div>
+    <div class="list">${starters.map((id) => row(id, true))}${!starters.length && html`<div class="empty">${roster.length ? 'Nobody starting.' : html`No one yet. Grab free agents in <a href=${`#/l/${x.code}/players`}>Players</a>.`}</div>`}</div>
     ${(hasBench || bench.length > 0) && html`<div class="sec">${hasBench ? 'Bench' : `Joins the lineup next ${p}`} <span class="n">${bench.length}</span>${now && bench.length > 0 && hasBench && html`<span class="tiny muted" style="text-transform:none;letter-spacing:0">not scoring this ${p}</span>`}</div>
       <div class="list">${bench.map((id) => row(id, false))}${!bench.length && html`<div class="empty">No one on the bench.</div>`}</div>`}
     ${roster.length < st.settings.rosterSize && st.phase === 'season' && (pk === me || isC) && html`<p class="small muted" style="margin-top:10px">Open roster spot — grab a free agent in <a href=${`#/l/${x.code}/players`}>Players</a>.</p>`}
@@ -572,10 +620,10 @@ function EntitySheet({ x, eid, onClose }) {
         ${season && !x.solo && owner === me && html`<button class="btn" onClick=${async () => { if (await ask(`Drop ${e.name}?`, 'They become a free agent anyone can grab.', 'Drop')) { const r = await run('adddrop', { drop: eid }); if (r.ok) onClose(); } }}>Drop</button>`}
         ${isC && !x.solo && season && owner && owner !== me && html`<button class="btn" onClick=${async () => { if (await ask(`Drop ${e.name} from ${team(owner)}?`, 'Commissioner move. They become a free agent.', 'Drop')) { const r = await run('adddrop', { drop: eid, pk: owner }); if (r.ok) onClose(); } }}>Force drop</button>`}
       </div>`}
-    ${st.round > 0 && html`<div><div class="h3" style="margin-bottom:6px">By ${x.p}</div><div class="chips">${Array.from({ length: st.round }, (_, i) => html`<span class="chip">${x.P} ${i + 1} <${Pts} v=${p.r[i + 1] || 0} /></span>`)}</div></div>`}
+    ${st.round > 0 && !x.race && html`<div><div class="h3" style="margin-bottom:6px">By ${x.p}</div><div class="chips">${Array.from({ length: st.round }, (_, i) => html`<span class="chip">${x.P} ${i + 1} <${Pts} v=${p.r[i + 1] || 0} /></span>`)}</div></div>`}
     <div><div class="h3" style="margin-bottom:6px">Game log</div>
       <div class="list feed">${hist.map((s) => html`<div class="it ${s.void ? 'void' : ''}"><div class="grow tx">${s.label}${s.qty > 1 ? ` ×${s.qty}` : ''}${s.note && html` <span class="muted small">“${s.note}”</span>`}
-        <div class="when">${x.P} ${s.round} · ${name(s.by)} · ${ago(s.at)}</div></div><${Pts} v=${s.pts} /></div>`)}
+        <div class="when">${x.race ? '' : `${x.P} ${s.round} · `}${name(s.by)} · ${ago(s.at)}</div></div><${Pts} v=${s.pts} /></div>`)}
       ${!hist.length && html`<div class="empty">Nothing logged yet.</div>`}</div></div>
   </div><//>`;
 }
@@ -616,7 +664,7 @@ function LogSheet({ x, eid, onClose }) {
       ${cat === '*' && html`<div class="row"><input class="in grow" maxlength="60" placeholder="What happened" aria-label="What happened" value=${label} onInput=${(v) => setLabel(v.target.value)} />
         <input class="in mono" style="width:86px;text-align:center" type="number" step="0.5" placeholder="±pts" aria-label="Points" value=${pts} onInput=${(v) => setPts(v.target.value)} /></div>`}
       <div class="row"><div class="grow"><label class="f">How many times</label><${Step} value=${qty} min=${1} max=${99} onChange=${setQty} /></div>
-        ${isC && st.round > 1 && html`<div><label class="f">${x.P}</label><${Step} value=${round} min=${1} max=${st.round} onChange=${setRound} /></div>`}</div>
+        ${isC && st.round > 1 && !x.race && html`<div><label class="f">${x.P}</label><${Step} value=${round} min=${1} max=${st.round} onChange=${setRound} /></div>`}</div>
       <div><label class="f" for="nt">Receipts (optional)</label><input id="nt" class="in" maxlength="140" placeholder="Link, quote, or what you saw" value=${note} onInput=${(v) => setNote(v.target.value)} /></div>
       <button class="btn pri big" disabled=${!ok}>${ok ? `Log ${sgn(each * qty)} for ${ent.name}` : 'Pick what happened'}</button>
     </form>`}
@@ -664,7 +712,7 @@ function LeagueTab({ x }) {
     ${h2h && html`<div class="sec">Schedule</div>
       <div class="card stack-s">${Array.from({ length: st.settings.numRounds }, (_, i) => i + 1).map((r) => html`<div key=${r}>
         <div class="tiny muted" style="font-weight:700;letter-spacing:.06em">${x.P.toUpperCase()} ${r}${r === st.round && st.phase === 'season' ? ' · LIVE' : ''}</div>
-        ${matchups(st.draft.order, r).map(([a, b]) => html`<div class="row small" style="gap:6px"><span class="ell ${a === me ? '' : ''}" style=${a === me ? 'font-weight:700' : ''}>${name(a)}</span>
+        ${(r <= st.round ? pairsFor(st, r) : matchups(st.draft.order, r)).map(([a, b]) => html`<div class="row small" style="gap:6px"><span class="ell ${a === me ? '' : ''}" style=${a === me ? 'font-weight:700' : ''}>${name(a)}</span>
           ${b ? html`${r <= st.round && html`<span class="mono">${num(sc.team[a].r[r])}–${num(sc.team[b].r[r])}</span>`}${r > st.round && html`<span class="muted">vs</span>`}<span class="ell" style=${b === me ? 'font-weight:700' : ''}>${name(b)}</span>` : html`<span class="muted">bye</span>`}</div>`)}</div>`)}</div>`}
 
     ${x.solo && html`<p class="small muted" style="margin-top:8px">Tap a name to see everything they’ve been scored for.</p>`}
@@ -672,7 +720,7 @@ function LeagueTab({ x }) {
     <div class="sec">Rules</div><${Settings} x=${{ ...x, isC: false }} />
     ${isC && html`<button class="btn dark" style="margin-top:12px" onClick=${() => open({ k: 'rules' })}>⚙️ Commissioner tools</button>`}
     <div class="sec">Invite link</div><${LinkBox} code=${code} />
-    <p class="small muted" style="margin-top:8px">Anyone with the link can watch. Only people who joined before the start can play.</p>
+    <p class="small muted" style="margin-top:8px">Anyone with the link can watch or join.${st.phase === 'season' && !x.solo ? ' Late joiners build a team from free agents.' : ''}</p>
     ${pick && html`<${Sheet} title="Trade with…" onClose=${() => setPick(false)}><div class="list">${st.draft.order.filter((k) => k !== me).map((k) => html`<div class="li tap" onClick=${() => { setPick(false); open({ k: 'trade', to: k }); }}>
       <${Av} pk=${k} /><div class="grow"><div class="t">${team(k)}</div><div class="s">${name(k)}</div></div></div>`)}</div><//>`}
   </div>`;
@@ -691,7 +739,7 @@ function Feed({ x }) {
     ${items.map((f) => (f.k === 'chat'
     ? html`<div class="msg ${f.pk === me ? 'mine' : ''}" key=${f.id}>${f.pk !== me && html`<${Av} pk=${f.pk} size="sm" />`}<div><div class="when">${f.pk === me ? '' : name(f.pk) + ' · '}${ago(f.at)}</div><div class="bub">${f.text}</div></div></div>`
     : f.k === 'stat'
-      ? html`<div class="play ${f.void ? 'void' : ''}" key=${f.id}><span>🧾</span><div class="grow"><span class="tx">${f.text}</span>${f.note && html` <span class="muted">“${f.note}”</span>`}<div class="when">${name(f.pk)} · ${P} ${f.round} · ${ago(f.at)}</div></div><${Pts} v=${f.pts} /></div>`
+      ? html`<div class="play ${f.void ? 'void' : ''}" key=${f.id}><span>🧾</span><div class="grow"><span class="tx">${f.text}</span>${f.note && html` <span class="muted">“${f.note}”</span>`}<div class="when">${name(f.pk)} · ${x.race ? '' : `${P} ${f.round} · `}${ago(f.at)}</div></div><${Pts} v=${f.pts} /></div>`
       : html`<div class="sys" key=${f.id}><span>${f.icon} ${f.text} · ${ago(f.at)}</span></div>`))}
     ${mem ? html`<form class="chatbar" onSubmit=${send}><input class="in grow" maxlength="500" placeholder="Talk your trash" aria-label="Message" autocomplete="off" value=${text} onInput=${(e) => setText(e.target.value)} /><button class="btn dark">Send</button></form>`
     : html`<p class="small muted center" style="margin-top:14px">Sign in as a manager to chat.</p>`}

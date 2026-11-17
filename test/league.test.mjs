@@ -2,7 +2,7 @@
 // Run: node test/league.test.mjs ws://localhost:7777   (any nostr relay URL works)
 import assert from 'node:assert/strict';
 import { League, createLeague, rid } from '../js/net.js';
-import { scores, standings, matchups, draftSlot } from '../js/core.js';
+import { scores, standings, matchups, draftSlot, pairsFor } from '../js/core.js';
 
 const relays = process.argv.slice(2);
 if (!relays.length) { console.error('usage: node test/league.test.mjs <relay-url>...'); process.exit(2); }
@@ -147,6 +147,41 @@ await ok(S.act('advance', { n: 2 })); await ok(S.act('advance', { n: 3 }));
 let ss = standings(S.state);
 assert.equal(ss[0].pk, R.me.pk); assert.equal(ss[0].w, 1); assert.equal(ss[0].pf, 10); assert.equal(ss[1].pf, -4);
 [S, R].forEach((l) => l.close());
+
+// start alone, friends join mid-season; points race has no weeks
+const Q = await createLeague({ name: 'Solo race', me: 'Quinn', pin: 'quinn-pin', settings: { mode: 'solo', format: 'points' }, cats, pool: [] }, { relays });
+await ok(Q.act('draft.start', { order: [Q.me.pk] }));                           // just me is fine
+assert.equal(Q.state.phase, 'season');
+await ok(Q.act('stat', { eid: Q.state.rosters[Q.me.pk][0], cat: 'a' }));
+const W = await new League(Q.code, { relays }).init(); await until(() => W.synced && W.state.phase === 'season', 'race sync');
+W.login('Wes', 'wes-pin'); await ok(W.act('join', { name: 'Wes' }));           // joining stays open
+{ const r = await W.act('stat', { eid: W.state.rosters[W.me.pk][0], cat: 'a', qty: 2 }); if (r.err) console.log('DBG', W.state.phase, W.state.round, [...W.parsed.values()].map((e) => e.t + ':' + e.s + ':' + (W.state.rejected.get(e.id) || 'ok'))); assert.ok(r.ok, r.err); }
+await until(() => Q.state.stats.length === 2, 'race stats');
+let rs = standings(Q.state); assert.equal(rs[0].pk, W.me.pk); assert.equal(rs[0].pf, 20); assert.equal(rs[1].pf, 10);
+await ok(Q.act('advance', { n: 2 })); assert.equal(Q.state.phase, 'done');      // one long race: ending it ends the season
+await bad(W.act('join', { name: 'Late' }), /already|over/i);
+[Q, W].forEach((l) => l.close());
+
+// draft league: someone joins after the draft, past matchups stay put
+const G = await createLeague({ name: 'Late draft', me: 'Gia', pin: 'gia-pin', settings: { rosterSize: 2, starters: 1, numRounds: 3 }, cats, pool: pool.slice(0, 8) }, { relays });
+const Hh = await new League(G.code, { relays }).init(); await until(() => Hh.synced && Hh.state.exists, 'late sync');
+Hh.login('Hal', 'hal-pin'); await ok(Hh.act('join', { name: 'Hal' }));
+await until(() => G.state.members.length === 2, 'hal in');
+await ok(G.act('draft.start', { order: [G.me.pk, Hh.me.pk] }));
+for (const [l, n, e] of [[G, 0, 'e0'], [Hh, 1, 'e1'], [Hh, 2, 'e2'], [G, 3, 'e3']]) { await until(() => l.state.draft.picks.length === n, 'late pick ' + n); await ok(l.act('pick', { n, eid: e })); }
+await until(() => G.state.phase === 'season', 'late season'); await ok(G.act('advance', { n: 1 }));
+await ok(G.act('stat', { eid: 'e0', cat: 'a' }));
+const week1 = JSON.stringify(pairsFor(G.state, 1));
+const N = await new League(G.code, { relays }).init(); await until(() => N.synced && N.state.round === 1, 'newbie sync');
+N.login('Nia', 'nia-pin'); await ok(N.act('join', { name: 'Nia' }));
+assert.deepEqual(N.state.rosters[N.me.pk], []);                                   // empty roster…
+await ok(N.act('adddrop', { add: 'e5' }));                                         // …filled from free agents
+await until(() => G.state.members.length === 3 && G.state.owner.e5 === N.me.pk, 'newbie arrives');
+assert.equal(JSON.stringify(pairsFor(G.state, 1)), week1);                         // week 1 unchanged
+await ok(G.act('advance', { n: 2 }));
+assert.ok(pairsFor(G.state, 2).flat().includes(N.me.pk));                          // in the schedule from week 2
+assert.equal(standings(G.state).find((r) => r.pk === G.me.pk).w, 1);
+[G, Hh, N].forEach((l) => l.close());
 
 // pick timer: once the clock runs out, any manager's client may submit the top available player
 const T = await createLeague({ name: 'Timer', me: 'Tia', pin: 'tia-pin', settings: { rosterSize: 1, starters: 1, pickSecs: 1 }, cats, pool: pool.slice(0, 4) }, { relays });
