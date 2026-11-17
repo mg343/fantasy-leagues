@@ -11,6 +11,29 @@ function Rotator() {
   return html`<span class="rot">${THINGS[i]}</span>`;
 }
 
+// Removing a league takes two deliberate steps: expand the row, then type the league's name.
+function MyLeague({ code, v, onGone }) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState('');
+  const match = typed.trim().toLowerCase() === v.name.trim().toLowerCase();
+  const remove = (e) => { e.preventDefault(); if (!match) return; forgetLeague(code); toast(`Removed ${v.name}`); onGone(); };
+  return html`<div class="lrow ${open ? 'open' : ''}">
+    <div class="li tap" onClick=${() => !open && go('l/' + code)}>
+      <div class="av">${v.emoji || '🏆'}</div>
+      <div class="grow"><div class="t ell">${v.name}</div><div class="s">opened ${ago(v.seen / 1000)} ago</div></div>
+      <button class="x" title=${open ? 'Cancel' : 'Remove'} aria-label=${open ? 'Cancel' : 'Remove ' + v.name} aria-expanded=${open}
+        onClick=${(e) => { e.stopPropagation(); setOpen(!open); setTyped(''); }}>${open ? '↩' : '✕'}</button>
+    </div>
+    ${open && html`<form class="danger" onSubmit=${remove}>
+      <p class="small"><b>Are you sure?</b> This removes <b>${v.name}</b> from this device. You’ll need the invite link to get back in. The league keeps going for everyone else.</p>
+      <label class="small" for=${'rm-' + code} style="display:block;margin:10px 0 6px">Type <b>${v.name}</b> to confirm:</label>
+      <input id=${'rm-' + code} class="in" autocomplete="off" placeholder=${v.name} value=${typed} onInput=${(e) => setTyped(e.target.value)} />
+      <div class="row" style="margin-top:10px"><button type="button" class="btn grow" onClick=${() => { setOpen(false); setTyped(''); }}>Keep it</button>
+        <button class="btn grow rm" disabled=${!match}>Remove league</button></div>
+    </form>`}
+  </div>`;
+}
+
 function Home() {
   const [mine, setMine] = useState(myLeagues());
   const list = Object.entries(mine).filter(([c, v]) => parseCode(c) && v.name).sort((a, b) => b[1].seen - a[1].seen);
@@ -24,11 +47,7 @@ function Home() {
     </section>
 
     ${list.length > 0 && html`<div class="sec">Your leagues <span class="n">${list.length}</span></div>
-      <div class="list">${list.map(([code, v]) => html`<div class="li tap" key=${code} onClick=${() => go('l/' + code)}>
-        <div class="av">${v.emoji || '🏆'}</div>
-        <div class="grow"><div class="t ell">${v.name}</div><div class="s">opened ${ago(v.seen / 1000)} ago</div></div>
-        <button class="x" title="Remove from this device" aria-label="Remove from this device" onClick=${(e) => { e.stopPropagation(); forgetLeague(code); setMine(myLeagues()); }}>✕</button>
-      </div>`)}</div>`}
+      <div class="list">${list.map(([code, v]) => html`<${MyLeague} key=${code} code=${code} v=${v} onGone=${() => setMine(myLeagues())} />`)}</div>`}
 
     <div class="sec">Pick a starting point</div>
     <div class="tgrid">${TEMPLATES.map((t) => html`<a class="card tcard" href=${'#/new/' + t.id} key=${t.id}>

@@ -221,3 +221,10 @@ hr { border: 0; border-top: 1.5px dashed var(--ink); margin: 26px 0; opacity: .3
 .opt.on { background: var(--yellow); box-shadow: 2px 2px 0 var(--ink); } .opt.on span { color: var(--ink); }
 
 .eg { margin-top: 12px; background: #F7F2E6; border: 1.5px dashed var(--ink); border-radius: 12px; padding: 10px 12px; font-size: 14px; line-height: 1.45; }
+
+/* remove-league confirm */
+.lrow + .lrow { border-top: 1.5px solid var(--soft); }
+.lrow .li { border-top: 0; }
+.lrow.open { background: #FFF0EC; }
+.lrow .danger { padding: 4px 14px 14px; }
+.btn.rm { background: var(--red); color: #fff; }
