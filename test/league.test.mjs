@@ -2,7 +2,7 @@
 // Run: node test/league.test.mjs ws://localhost:7777   (any nostr relay URL works)
 import assert from 'node:assert/strict';
 import { League, createLeague, rid } from '../js/net.js';
-import { scores, standings, matchups, draftSlot, pairsFor } from '../js/core.js';
+import { scores, standings, matchups, draftSlot, pairsFor, reduce, settle, endsAt } from '../js/core.js';
 
 const relays = process.argv.slice(2);
 if (!relays.length) { console.error('usage: node test/league.test.mjs <relay-url>...'); process.exit(2); }
@@ -182,6 +182,36 @@ await ok(G.act('advance', { n: 2 }));
 assert.ok(pairsFor(G.state, 2).flat().includes(N.me.pk));                          // in the schedule from week 2
 assert.equal(standings(G.state).find((r) => r.pk === G.me.pk).w, 1);
 [G, Hh, N].forEach((l) => l.close());
+
+// timed points race: ends by itself after N days; late logs are refused; disputes
+const T2 = await createLeague({ name: 'House month', me: 'Tom', pin: 'tom-pin', settings: { mode: 'solo', format: 'points', lengthDays: 30 }, cats, pool: [] }, { relays });
+const V = await new League(T2.code, { relays }).init(); await until(() => V.synced && V.state.exists, 'house sync');
+V.login('Val', 'val-pin'); await ok(V.act('join', { name: 'Val' }));
+await until(() => T2.state.members.length === 2, 'val joins');
+await ok(T2.act('draft.start', { order: [T2.me.pk, V.me.pk] }));
+const end = endsAt(T2.state); assert.ok(end > Date.now() / 1000 + 29 * 86400 && end < Date.now() / 1000 + 31 * 86400, 'ends in ~30 days');
+await until(() => V.state.phase === 'season', 'house live');
+const tomId = T2.state.rosters[T2.me.pk][0], valId = V.state.rosters[V.me.pk][0];
+const bogus = await ok(T2.act('stat', { eid: valId, cat: 'b', note: 'left dishes' }));
+await until(() => V.state.stats.length === 1, 'bogus arrives');
+await ok(V.act('stat.dispute', { id: bogus.id, why: 'they were not mine' }));
+await bad(V.act('stat.dispute', { id: bogus.id }), /Already/);
+await bad(V.act('stat.keep', { id: bogus.id }), /commissioner/);
+await until(() => T2.state.stats[0].disputed === V.me.pk, 'dispute arrives');
+await ok(T2.act('stat.void', { id: bogus.id }));
+await ok(V.act('stat', { eid: valId, cat: 'a' }));
+await ok(T2.act('settings', { settings: { lengthDays: 14 } }));                     // commish can shorten / extend mid-season
+await until(() => V.state.settings.lengthDays === 14 && V.state.stats.length === 2, 'length change');
+// Replay with a clock past the deadline: the season is over and Val (10) beats Tom (0, bogus struck).
+const later = settle(reduce([...V.parsed.values()], { commishPrefix: V.commishPrefix }), endsAt(V.state) + 1);
+assert.equal(later.phase, 'done'); assert.equal(standings(later)[0].pk, V.me.pk);
+// An event stamped after the deadline is refused, deterministically, by every client.
+const lateEv = { id: 'late', pk: T2.me.pk, at: endsAt(V.state) + 60, s: V.state.maxS + 1, t: 'stat', p: { eid: tomId, cat: 'a' } };
+const withLate = reduce([...V.parsed.values(), lateEv], { commishPrefix: V.commishPrefix });
+assert.equal(withLate.phase, 'done'); assert.ok(withLate.rejected.has('late'));    // not even the commissioner
+const lateMember = { ...lateEv, id: 'late2', pk: V.me.pk, p: { eid: valId, cat: 'a' } };
+assert.ok(reduce([...V.parsed.values(), lateMember], { commishPrefix: V.commishPrefix }).rejected.has('late2'));
+[T2, V].forEach((l) => l.close());
 
 // pick timer: once the clock runs out, any manager's client may submit the top available player
 const T = await createLeague({ name: 'Timer', me: 'Tia', pin: 'tia-pin', settings: { rosterSize: 1, starters: 1, pickSecs: 1 }, cats, pool: pool.slice(0, 4) }, { relays });

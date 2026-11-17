@@ -1,6 +1,6 @@
 import { html, useState, useEffect, useRef, useNow, go, toast, ask, parseNames, ago, assignEmoji, Av, Ini, Pts, num, sgn, plural, Sheet, Seg, Step, copy, leagueUrl } from './ui.js';
 import { League, rid, validPin, PIN_MIN } from './net.js';
-import { scores, standings, matchups, draftSlot, clockStart, available, roundDone, normName, PERIODS, fitRoster, isSolo, isRace, pairsFor, selfId } from './core.js';
+import { scores, standings, matchups, draftSlot, clockStart, available, roundDone, normName, PERIODS, fitRoster, isSolo, isRace, pairsFor, selfId, endsAt } from './core.js';
 
 // ---------------------------------------------------------------- plumbing
 function useLeague(code) {
@@ -63,7 +63,7 @@ export function LeaguePage({ code, tab }) {
     : st.phase === 'draft' ? html`<span class="pill live"><span class="dot pulse" style="background:#17140F"></span>Draft live</span>`
       : st.phase === 'done' ? html`<span class="pill dark">Final</span>`
         : st.round === 0 ? html`<span class="pill yel">Preseason</span>`
-          : isRace(st) ? html`<span class="pill live">Season live</span>`
+          : isRace(st) ? html`<span class="pill live">${endsAt(st) ? `Live · ${timeLeft(endsAt(st))}` : 'Season live'}</span>`
             : html`<span class="pill live">${P} ${st.round} of ${st.settings.numRounds}</span>`;
   const on = lg.online;
 
@@ -176,7 +176,7 @@ function Lobby({ x }) {
   };
   const start = async () => {
     const ok = solo
-      ? await ask('Start the season?', `Scoring opens now${x.race ? '' : ` with ${P} 1`}. Friends can still join with the link and start at 0.`, 'Start season')
+      ? await ask('Start the season?', `Scoring opens now${x.race ? (set.lengthDays ? ` and the race ends on ${fmtDay(Date.now() / 1000 + set.lengthDays * 86400)}` : '') : ` with ${P} 1`}. Friends can still join with the link and start at 0.`, 'Start season')
       : await ask('Start the draft?', `Anyone who joins after this builds a team from free agents. ${order ? `${name(order[0])} picks first.` : 'The draft order will be randomized.'} ${st.members.length} people, ${fit} ${fit === 1 ? 'pick' : 'picks'} each.`, 'Start draft');
     if (ok) run('draft.start', { order: order || shuffle() });
   };
@@ -184,7 +184,7 @@ function Lobby({ x }) {
   const startBtn = html`<button class="btn pri big" disabled=${problems.length > 0} onClick=${start}>${solo ? '▶️ Start the season' : '🚨 Start the draft'}</button>`;
   const c0 = st.cats[0], ex = c0 ? `“${c0.name}” (${sgn(c0.pts)})` : 'something on the scoring list';
   const wk = h2h ? `Each ${p}, everyone is matched against one other person. Higher score wins the ${p}.` : 'No weeks, no matchups — one long race for the most points.';
-  const end = h2h ? `After ${plural(set.numRounds, p)} the best record wins.` : 'When the commissioner ends the season, most points wins.';
+  const end = h2h ? `After ${plural(set.numRounds, p)} the best record wins.` : set.lengthDays ? `After ${lenLabel(set.lengthDays)} (the clock starts when the season does), most points wins. The commissioner can end it early or extend it.` : 'When the commissioner ends the season, most points wins.';
   const steps = solo ? [
     ['Send the link below to your friends.', `${st.members.length > 1 ? `${st.members.length} in so far. ` : ''}You can start now — people can join any time and start at 0.`],
     ['Do things, log points.', `When someone does ${ex}, anyone taps “Log points”, picks the person and what they did.`],
@@ -292,7 +292,7 @@ function Settings({ x }) {
     return html`<div class="card"><div class="chips">
       <span class="chip">${solo ? '🙋 You score for yourselves' : '📋 Drafted teams'}</span>
       <span class="chip">${s.format === 'h2h' ? '⚔️ Head-to-head' : '🏁 Points race'}</span>${!solo && html`<span class="chip">🧢 ${s.rosterSize} per team</span>
-      ${!x.race && html`<span class="chip">▶️ ${s.starters} start</span>`}`}${x.race ? html`<span class="chip">🏁 Ends when the commissioner says</span>` : html`<span class="chip">🗓️ ${plural(s.numRounds, p)}</span>`}
+      ${!x.race && html`<span class="chip">▶️ ${s.starters} start</span>`}`}${x.race ? html`<span class="chip">🏁 ${endsAt(st) ? `Ends ${fmtDay(endsAt(st))}` : s.lengthDays ? `Runs ${lenLabel(s.lengthDays)}` : 'Ends when the commissioner says'}</span>` : html`<span class="chip">🗓️ ${plural(s.numRounds, p)}</span>`}
       <span class="chip">✍️ ${s.whoScores === 'all' ? 'Anyone logs points' : 'Commish logs points'}</span>
       ${s.pickSecs > 0 && html`<span class="chip">⏱️ ${fmtSecs(s.pickSecs)} per pick</span>`}
       ${s.punishment && html`<span class="chip">💀 Last place: ${s.punishment}</span>`}</div></div>`;
@@ -305,6 +305,12 @@ function Settings({ x }) {
     ${!solo && !x.race && row('Starters', s.starters < s.rosterSize ? `Only starters score. ${s.rosterSize - s.starters} on the bench.` : 'Everyone starts — no bench.', html`<${Step} value=${s.starters} min=${1} max=${s.rosterSize} disabled=${!pre} onChange=${(v) => set({ starters: v })} />`)}
     ${!x.race && row('Scoring period', `What one stretch of the season is called. You start and end each ${p} by hand, so it can be any length.`,
     html`<select class="in" style="width:auto" aria-label="Scoring period" value=${P} onChange=${(e) => set({ period: e.target.value })}>${PERIODS.map((v) => html`<option value=${v}>${v}</option>`)}</select>`)}
+    ${x.race && st.phase !== 'done' && row('Length', st.phase === 'season' && endsAt(st) ? `Ends ${fmtDay(endsAt(st))} — ${timeLeft(endsAt(st))}.` : s.lengthDays ? 'The clock starts when you start the season. It ends on its own.' : 'No end date. You end it from the Scores tab.',
+    html`<select class="in" style="width:auto" aria-label="Length" value=${s.lengthDays} onChange=${async (e) => {
+      const v = +e.target.value;
+      if (st.phase === 'season' && v && st.startedAt + v * 86400 <= Date.now() / 1000) { e.target.value = s.lengthDays; return toast('That would end the season right now — use End season instead', 'err'); }
+      set({ lengthDays: v });
+    }}>${(LEN_OPTS.some((o) => o[0] === s.lengthDays) ? LEN_OPTS : [...LEN_OPTS, [s.lengthDays, `${s.lengthDays} days`]]).map(([v, l]) => html`<option value=${v}>${st.phase === 'season' && v ? `${l} → ${fmtDay(st.startedAt + v * 86400)}` : l}</option>`)}</select>`)}
     ${!x.race && row('Season length', `How many ${p}s you play.`, html`<${Step} value=${s.numRounds} min=${Math.max(1, st.round)} max=${52} disabled=${st.phase === 'done'} onChange=${(v) => set({ numRounds: v })} />`)}
     ${row('Who logs points', s.whoScores === 'all' ? 'Anyone in the league. You can strike bad calls.' : 'Only you.', html`<${Seg} value=${s.whoScores} options=${[['all', 'Everyone'], ['commish', 'Just me']]} onChange=${(v) => set({ whoScores: v })} />`)}
     ${pre && !solo && row('List additions', s.openPool ? 'Anyone in the league can add names before the draft.' : 'Only you can add names.', html`<${Seg} value=${s.openPool ? 'y' : 'n'} options=${[['y', 'Everyone'], ['n', 'Just me']]} onChange=${(v) => set({ openPool: v === 'y' })} />`)}
@@ -321,6 +327,16 @@ function Settings({ x }) {
         ${pun !== s.punishment && html`<button class="btn dark">Save</button>`}</form></div>
   </div>`;
 }
+const fmtDay = (t) => new Date(t * 1000).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+function timeLeft(t) {
+  const d = t - Date.now() / 1000;
+  if (d <= 0) return 'ending now';
+  if (d < 3600) return `${Math.ceil(d / 60)} min left`;
+  if (d < 86400) return `${Math.ceil(d / 3600)} hr left`;
+  return `${Math.ceil(d / 86400)} days left`;
+}
+const LEN_OPTS = [[0, 'Until I end it'], [7, '1 week'], [14, '2 weeks'], [21, '3 weeks'], [30, '1 month'], [45, '6 weeks'], [60, '2 months'], [90, '3 months']];
+const lenLabel = (d) => (LEN_OPTS.find((o) => o[0] === d) || [d, `${d} days`])[1];
 const fmtSecs = (s) => (s >= 3600 ? `${s / 3600} hr` : s >= 60 ? `${s / 60} min` : `${s} sec`);
 const fmtClock = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = String(s % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`; };
 
@@ -434,31 +450,53 @@ function Scores({ x }) {
       <div class="small" style="opacity:.75">${st.round === 0 ? 'Everyone ready? Lock lineups and open scoring.' : last ? `Final ${p}. End it when scoring is settled.` : `When the ${p} is over, close it out.`}</div></div>
       <button class="btn yel" onClick=${advance}>${st.round === 0 ? `Start ${P} 1` : last ? 'End season' : `End ${P} ${st.round} →`}</button></div></div>`}
 
+    <${Disputes} x=${x} />
     ${st.round > 0 && html`<div class="sec">Scoring plays <span class="n">${plays.filter((s) => !s.void).length}</span></div>
       <div class="list feed">${plays.map((s) => html`<${Play} x=${x} s=${s} key=${s.id} />`)}
       ${!plays.length && html`<div class="empty">${live ? (x.canScore ? 'Nothing logged yet. Something happen? Hit “Log points”.' : `Nothing logged yet this ${p}.`) : `Nothing was logged this ${p}.`}</div>`}</div>`}
   </div>`;
 }
 
+function Disputes({ x }) {
+  const n = x.st.stats.filter((s) => s.disputed && !s.void).length;
+  if (!n || x.st.phase !== 'season') return null;
+  return html`<div class="banner warn" style="margin-top:14px">⚠️ <span>${plural(n, 'play')} ${n === 1 ? 'is' : 'are'} disputed. ${x.isC ? 'Strike or keep each one below.' : `Waiting on ${x.name(x.st.commish)} to rule.`}</span></div>`;
+}
+
 function RaceScores({ x, rows }) {
   const { st, sc, isC, run, me, name, team } = x;
+  const [preview, setPreview] = useState(false);
+  useNow(30000);
   const plays = st.stats.slice().reverse();
-  const end = async () => { if (await ask('End the season?', 'Final standings lock and a champion is crowned. This can’t be undone.', 'End season')) run('advance', { n: st.round + 1 }); };
+  const e = endsAt(st);
+  const place = (i) => ['🥇', '🥈', '🥉'][i] || `${i + 1}.`;
+  const end = async () => { setPreview(false); await run('advance', { n: st.round + 1 }); };
   return html`<div>
     ${st.phase === 'done' && html`<div class="card yellow champ" style="margin-bottom:16px"><div class="cup">🏆</div>
       <div class="tiny" style="font-weight:700;letter-spacing:.1em;margin-top:8px">CHAMPION</div><h2>${team(rows[0].pk)}</h2><p>${name(rows[0].pk)} wins ${st.name}.</p>
-      ${rows.length > 1 && html`<p class="small" style="margin-top:10px">💀 Last place: <b>${name(rows[rows.length - 1].pk)}</b>${st.settings.punishment ? ` — ${st.settings.punishment}` : ''}</p>`}</div>`}
-    <div class="rnav"><div class="ttl">The race ${st.phase === 'season' ? html`<span class="pill live"><span class="dot pulse" style="background:#17140F"></span>LIVE</span>` : html`<span class="pill dark">FINAL</span>`}</div></div>
+      ${rows.length > 1 && html`<p class="small" style="margin-top:10px">💀 Last place: <b>${name(rows[rows.length - 1].pk)}</b>${st.settings.punishment ? ` — ${st.settings.punishment}` : ''}</p>`}
+      ${st.endedAt && html`<p class="tiny" style="margin-top:8px;opacity:.7">Final · ${fmtDay(st.endedAt)}</p>`}</div>`}
+    <div class="rnav" style="display:block"><div class="ttl">The race ${st.phase === 'season' ? html`<span class="pill live"><span class="dot pulse" style="background:#17140F"></span>LIVE</span>` : html`<span class="pill dark">FINAL</span>`}</div>
+      ${st.phase === 'season' && html`<div class="small muted" style="margin-top:2px">${e ? html`Ends <b>${fmtDay(e)}</b> · ${timeLeft(e)}` : `No end date — ${isC ? 'you end it' : `${name(st.commish)} ends it`} when you’re done.`}</div>`}</div>
     <div class="list">${rows.map((r, i) => html`<div class="li ${r.pk === me ? 'me' : ''}" key=${r.pk}>
       <span class="mono muted" style="width:18px">${i + 1}</span><${Av} pk=${r.pk} />
-      <div class="grow"><div class="t ell">${team(r.pk)}</div><div class="s">${name(r.pk)}${r.pk === me ? ' · you' : ''}${i > 0 ? ` · ${num(rows[0].pf - r.pf)} back` : rows.length > 1 ? ' · leading' : ''}</div></div>
+      <div class="grow"><div class="t ell">${team(r.pk)}</div><div class="s">${name(r.pk)}${r.pk === me ? ' · you' : ''}${i > 0 ? ` · ${num(rows[0].pf - r.pf)} back` : rows.length > 1 ? (st.phase === 'done' ? ' · champion' : ' · leading') : ''}</div></div>
       <div class="num" style="font-size:20px">${num(sc.team[r.pk].total)}</div></div>`)}</div>
     ${isC && st.phase === 'season' && html`<div class="card ink" style="margin-top:16px"><div class="row wrapx"><div class="grow" style="min-width:150px"><b>Commissioner</b>
-      <div class="small" style="opacity:.75">No weeks to manage. End the season whenever you’re done.</div></div>
-      <button class="btn yel" onClick=${end}>End season</button></div></div>`}
+      <div class="small" style="opacity:.75">${e ? `It ends on its own ${fmtDay(e)}. You can extend it in League → Commissioner tools, or end it early.` : 'End the season whenever you’re done.'}</div></div>
+      <button class="btn yel" onClick=${() => setPreview(true)}>End season…</button></div></div>`}
+    <${Disputes} x=${x} />
     <div class="sec">Scoring plays <span class="n">${plays.filter((s) => !s.void).length}</span></div>
     <div class="list feed">${plays.map((s) => html`<${Play} x=${x} s=${s} key=${s.id} />`)}
     ${!plays.length && html`<div class="empty">${x.canScore ? 'Nothing logged yet. Something happen? Hit “Log points”.' : 'Nothing logged yet.'}</div>`}</div>
+    ${preview && html`<${Sheet} title="Final results preview" onClose=${() => setPreview(false)}><div class="stack">
+      <p class="small muted">If you end the season now, this is the final result. It can’t be undone${e ? ` — otherwise it ends on its own ${fmtDay(e)}` : ''}.</p>
+      <div class="list">${rows.map((r, i) => html`<div class="li ${i === 0 ? 'me' : ''}" key=${r.pk}><span style="width:26px;text-align:center;font-size:18px">${place(i)}</span>
+        <div class="grow"><div class="t ell">${team(r.pk)}</div><div class="s">${name(r.pk)}${i === 0 ? ' · champion' : i === rows.length - 1 && rows.length > 1 ? ` · last place${st.settings.punishment ? ` — ${st.settings.punishment}` : ''}` : ''}</div></div>
+        <div class="num">${num(r.pf)}</div></div>`)}</div>
+      ${st.stats.some((s) => s.disputed && !s.void) && html`<div class="banner warn">⚠️ <span>Some plays are still disputed. Settle them first so the result is fair.</span></div>`}
+      <div class="row"><button class="btn grow" onClick=${() => setPreview(false)}>Keep playing</button><button class="btn pri grow" data-end onClick=${end}>End season now</button></div>
+    </div><//>`}
   </div>`;
 }
 
@@ -466,10 +504,15 @@ function Play({ x, s }) {
   const { st, isC, me, run, name } = x;
   const e = st.pool.get(s.eid);
   const own = Object.entries((st.locked[s.round] || {})).find(([, l]) => l.includes(s.eid));
-  return html`<div class="it ${s.void ? 'void' : ''}"><div class="ic"><${Ini} e=${e} size="sm" /></div>
+  const live = st.phase === 'season' && !s.void;
+  return html`<div class="it ${s.void ? 'void' : ''} ${s.disputed && !s.void ? 'disputed' : ''}"><div class="ic"><${Ini} e=${e} size="sm" /></div>
     <div class="grow tx"><b>${e ? e.name : '???'}</b> — ${s.label}${s.qty > 1 ? ` ×${s.qty}` : ''}
       ${s.note && html`<div class="small muted">“${s.note}”</div>`}
-      <div class="when">${x.solo ? '' : x.race ? (s.team ? `counts for ${name(s.team)} · ` : 'free agent — counts for no one · ') : (own ? `counts for ${name(own[0])}` : 'not in a starting lineup') + ' · '}logged by ${name(s.by)} · ${ago(s.at)}</div></div>
+      <div class="when">${x.solo ? '' : x.race ? (s.team ? `counts for ${name(s.team)} · ` : 'free agent — counts for no one · ') : (own ? `counts for ${name(own[0])}` : 'not in a starting lineup') + ' · '}logged by ${name(s.by)} · ${ago(s.at)}</div>
+      ${s.disputed && !s.void && html`<div class="dispute">⚠️ Disputed by ${name(s.disputed)}${isC && live ? html`
+        <button class="btn sm" onClick=${() => run('stat.void', { id: s.id }, 'Struck')}>Strike</button><button class="btn sm" onClick=${() => run('stat.keep', { id: s.id }, 'Ruling: it stands')}>Keep</button>` : html` · waiting on the commissioner`}</div>`}
+      ${s.kept && !s.void && html`<div class="when">⚖️ Upheld by the commissioner</div>`}
+      ${live && !s.disputed && !s.kept && x.mem && s.by !== me && !isC && html`<button class="btn ghost sm" style="padding:0;min-height:0;font-size:12px" onClick=${async () => (await ask('Dispute this play?', `${e ? e.name : ''}: ${s.label} (${sgn(s.pts)}). ${name(st.commish)} will be asked to strike it or keep it.`, 'Dispute')) && run('stat.dispute', { id: s.id }, 'Disputed — the commissioner will rule')}>Dispute</button>`}</div>
     <${Pts} v=${s.pts} />
     ${!s.void && (isC || s.by === me) && st.phase !== 'done' && html`<button class="x" aria-label="Strike this play" title="Strike" onClick=${async () => (await ask('Strike this play?', `${e ? e.name : ''}: ${s.label} (${sgn(s.pts)}) is removed from the record.`, 'Strike it')) && run('stat.void', { id: s.id })}>✕</button>`}
   </div>`;

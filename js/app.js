@@ -66,17 +66,28 @@ function Home() {
   </div>`;
 }
 
+const LENGTHS = [[7, '1 week'], [14, '2 weeks'], [30, '1 month'], [0, 'Until I end it']];
+
 function Create({ tid }) {
   const [tpl, setTplRaw] = useState(TEMPLATES.find((t) => t.id === tid) || TEMPLATES[0]);
   const [solo, setSolo] = useState(!!tpl.solo);
+  const [race, setRace] = useState(tpl.format === 'points');
+  const [days, setDays] = useState(tpl.lengthDays ?? 30);
   const [names, setNames] = useState('');
   const [name, setName] = useState('');
   const [me, setMe] = useState('');
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
-  const setTpl = (t) => { setTplRaw(t); setSolo(!!t.solo); setNames(''); };
+  const setTpl = (t) => { setTplRaw(t); setSolo(!!t.solo); setRace(t.format === 'points'); setDays(t.lengthDays ?? 30); setNames(''); };
   const c0 = tpl.cats[0], ex = `“${c0.name}” (${c0.pts > 0 ? '+' : ''}${c0.pts})`;
+  const per = (tpl.period || 'Week').toLowerCase();
+  const span = days ? (LENGTHS.find((l) => l[0] === days) || [0, `${days} days`])[1] : '';
   const count = parseNames(names).length;
+  const who = solo ? 'Ben' : 'Someone on your team';
+  const gets = solo ? 'Ben’s score goes up' : 'your score goes up';
+  const win = race
+    ? (days ? `After ${span}, whoever has the most points wins.` : 'When you end the season, whoever has the most points wins.')
+    : `Each ${per} ${solo ? 'Ben faces one friend' : 'your team faces a friend’s team'}; higher score wins the ${per}. Best record wins the league.`;
   const submit = async (e) => {
     e.preventDefault();
     if (!me.trim()) return toast('Add your name', 'err');
@@ -86,7 +97,7 @@ function Create({ tid }) {
       const lg = await createLeague({
         name: name.trim() || tpl.suggest || 'Untitled League', emoji: tpl.emoji, me: me.trim(), pin, hint: tpl.poolHint,
         cats: tpl.cats.map((c) => ({ id: rid(), ...c })), pool: solo ? [] : parseNames(names),
-        settings: { period: tpl.period || 'Week', mode: solo ? 'solo' : 'draft' },
+        settings: { period: tpl.period || 'Week', mode: solo ? 'solo' : 'draft', format: race ? 'points' : 'h2h', lengthDays: race ? days : 0 },
       });
       const code = lg.code; lg.close(); go('l/' + code);
     } catch (err) { toast(String(err.message || err), 'err'); setBusy(false); }
@@ -104,22 +115,30 @@ function Create({ tid }) {
           <button type="button" class="opt ${solo ? 'on' : ''}" onClick=${() => setSolo(true)}><b>🙋 We do</b><span>No draft. Everyone in the league scores for what they do in real life.</span></button>
           <button type="button" class="opt ${solo ? '' : 'on'}" onClick=${() => setSolo(false)}><b>📋 People we draft</b><span>Like fantasy football. Each of you drafts a team from a list of other people, and scores when they do things.</span></button>
         </div>
-        <div class="eg"><b>With 4 friends:</b> ${solo
-    ? html`everyone joins with your link. Ben does ${ex} → anyone logs it → Ben’s score goes up. Each ${(tpl.period || 'week').toLowerCase()} Ben faces one friend; higher score wins.`
-    : html`you make a list of ~16 names and take turns drafting 4 each. Someone on your team does ${ex} → anyone logs it → your score goes up. Each ${(tpl.period || 'week').toLowerCase()} your team faces a friend’s team.`}</div>
         ${!solo && html`<div style="margin-top:12px"><label class="f" for="pl" style="font-size:12px">Who can be drafted? ${count > 0 && html`<span class="muted">· ${count} so far</span>`}</label>
           <textarea id="pl" class="in" style="min-height:96px" placeholder=${`One per line. ${tpl.poolHint}`} value=${names} onInput=${(e) => setNames(e.target.value)}></textarea>
           <div class="row wrapx" style="margin-top:6px"><span class="tiny muted grow" style="min-width:160px">Aim for 3–4 names per person playing. You and your friends can add more later.</span>
             ${tpl.starter && html`<button type="button" class="btn sm" onClick=${() => setNames(tpl.starter.join('\n'))}>Use a starter list (${tpl.starter.length})</button>`}</div></div>`}
       </div>
 
-      <div><label class="f" for="ln">3 · League name</label>
+      <div class="card flat"><label class="f">3 · How do you win?</label>
+        <div class="stack-s">
+          <button type="button" class="opt ${race ? 'on' : ''}" onClick=${() => setRace(true)}><b>🏁 Most points</b><span>One running leaderboard. Simple — good for tracking a house, a trip, a semester.</span></button>
+          <button type="button" class="opt ${race ? '' : 'on'}" onClick=${() => setRace(false)}><b>⚔️ Weekly matchups</b><span>Like real fantasy: each ${per} you go head-to-head with one friend. Best record wins.</span></button>
+        </div>
+        ${race && html`<div style="margin-top:12px"><label class="f" style="font-size:12px">How long?</label>
+          <div class="chips">${LENGTHS.map(([d, l]) => html`<button type="button" class="chip ${days === d ? 'on' : ''}" onClick=${() => setDays(d)}>${l}</button>`)}</div>
+          <p class="tiny muted" style="margin-top:6px">${days ? 'The clock starts when you start the season, and it ends on its own. You can extend or end it early.' : 'You end it whenever you want.'}</p></div>`}
+        <div class="eg"><b>With 4 friends:</b> everyone joins with your link${solo ? '' : ' and you draft'}. ${who} does ${ex} → anyone logs it → ${gets}. ${win}</div>
+      </div>
+
+      <div><label class="f" for="ln">4 · League name</label>
         <input id="ln" class="in" maxlength="60" placeholder=${tpl.suggest || 'The Big League'} value=${name} onInput=${(e) => setName(e.target.value)} /></div>
       <div class="row wrapx" style="align-items:flex-start"><div class="grow" style="min-width:160px"><label class="f" for="mn">Your name</label>
         <input id="mn" class="in" maxlength="24" placeholder="What your friends call you" autocomplete="nickname" value=${me} onInput=${(e) => setMe(e.target.value)} /></div>
       <div style="width:150px"><label class="f" for="pn">PIN</label>
         <input id="pn" class="in" type="password" maxlength="32" placeholder=${`${PIN_MIN}+ characters`} autocomplete="new-password" value=${pin} onInput=${(e) => setPin(e.target.value)} /></div></div>
-      <p class="small muted" style="margin-top:6px">You’ll need your name and PIN to sign in again. There’s no reset. The choice in step 2 can’t be changed later.</p>
+      <p class="small muted" style="margin-top:6px">You’ll need your name and PIN to sign in again. There’s no reset. Step 2 can’t be changed later.</p>
       <button class="btn pri big" disabled=${busy}>${busy ? 'Creating…' : 'Create league →'}</button>
       <p class="small muted center">Next you’ll get a link to send your friends.</p>
     </form>

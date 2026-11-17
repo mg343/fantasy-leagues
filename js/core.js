@@ -5,7 +5,7 @@
 export const LIMITS = { members: 20, pool: 600, cats: 40 };
 export const DEFAULT_SETTINGS = {
   rosterSize: 4, starters: 3, format: 'h2h', numRounds: 4,
-  whoScores: 'all', openPool: true, pickSecs: 0, punishment: '', period: 'Week', draftNote: '', selfDraft: false, mode: 'draft',
+  whoScores: 'all', openPool: true, pickSecs: 0, punishment: '', period: 'Week', draftNote: '', selfDraft: false, mode: 'draft', lengthDays: 0,
 };
 export const PERIODS = ['Week', 'Episode', 'Round', 'Day'];
 
@@ -33,6 +33,7 @@ function cleanSettings(p, base) {
   if ('selfDraft' in p) s.selfDraft = !!p.selfDraft;
   // 'solo': everyone plays as themselves, no draft. 'draft': managers draft rosters from a list.
   if (p.mode === 'solo' || p.mode === 'draft') s.mode = p.mode;
+  if ('lengthDays' in p) s.lengthDays = int(p.lengthDays, 0, 365, s.lengthDays); // points race only; 0 = until the commissioner ends it
   s.starters = Math.min(s.starters, s.rosterSize);
   return s;
 }
@@ -83,7 +84,7 @@ function fresh() {
     phase: 'setup', members: [], pool: new Map(), cats: [],
     draft: { order: [], picks: [], at: 0 },
     rosters: {}, owner: {}, lineups: {}, locked: {}, round: 0,
-    stats: [], trades: [], feed: [], createdAt: 0, endedAt: 0, preorder: null, pairs: {},
+    stats: [], trades: [], feed: [], createdAt: 0, endedAt: 0, preorder: null, pairs: {}, startedAt: 0,
   };
 }
 
@@ -138,7 +139,7 @@ const H = {
       next.rosterSize = st.settings.rosterSize; next.starters = st.settings.starters; next.format = st.settings.format;
       next.selfDraft = st.settings.selfDraft; next.mode = st.settings.mode;
       next.numRounds = Math.max(next.numRounds, st.round, 1);
-      if (st.phase === 'done') next.numRounds = st.settings.numRounds;
+      if (st.phase === 'done') { next.numRounds = st.settings.numRounds; next.lengthDays = st.settings.lengthDays; }
     }
     st.settings = next;
     if (st.phase === 'setup') syncSelf(st);
@@ -246,7 +247,7 @@ const H = {
       st.settings.rosterSize = 1; st.settings.starters = 1;
       st.phase = 'season'; st.draft = { order: order.slice(), picks: [], at: ev.at };
       for (const k of order) { const id = selfId(k); st.rosters[k] = [id]; st.owner[id] = k; st.lineups[k] = [id]; }
-      beginWeek(st, 1);
+      st.startedAt = ev.at; beginWeek(st, 1);
       say(st, ev, '📣', isRace(st) ? 'The season is on!' : `The season is on — ${st.settings.period} 1 is live`);
       return;
     }
@@ -275,7 +276,7 @@ const H = {
     if (!draftSlot(st)) {
       st.phase = 'season'; st.round = 0;
       for (const k of st.draft.order) fixLineup(st, k);
-      if (isRace(st)) { beginWeek(st, 1); say(st, ev, '✅', 'Draft complete. The race is on!'); }
+      if (isRace(st)) { st.startedAt = ev.at; beginWeek(st, 1); say(st, ev, '✅', 'Draft complete. The race is on!'); }
       else say(st, ev, '✅', 'Draft complete. Set your lineups!');
     }
   },
@@ -300,12 +301,8 @@ const H = {
     if (ev.pk !== st.commish) return `Only the commissioner can advance the ${st.settings.period.toLowerCase()}`;
     if (st.phase !== 'season') return 'Season is not live';
     if (p.n !== st.round + 1) return 'Already advanced';
-    if (p.n > st.settings.numRounds || (isRace(st) && st.round >= 1)) {
-      st.phase = 'done'; st.endedAt = ev.at;
-      const top = standings(st)[0];
-      say(st, ev, '🏆', `Season over! ${who(st, top.pk)} takes the title`);
-      return;
-    }
+    if (p.n > st.settings.numRounds || (isRace(st) && st.round >= 1)) { finish(st, ev.at, 'Season over!'); return; }
+    if (p.n === 1 && !st.startedAt) st.startedAt = ev.at;
     beginWeek(st, p.n);
     say(st, ev, '📣', `${st.settings.period} ${p.n} is live — lineups are locked`);
   },
@@ -362,7 +359,7 @@ const H = {
     if (st.round < 1) return `Scoring opens when ${st.settings.period} 1 starts`;
     const isC = ev.pk === st.commish;
     if (!isC && !(st.settings.whoScores === 'all' && member(st, ev.pk))) return 'Only the commissioner can log scores';
-    if (st.phase === 'done' && !isC) return 'Season is over';
+    if (st.phase === 'done') return 'Season is over — results are final';
     const e = st.pool.get(p.eid);
     if (!e) return 'Unknown player';
     const qty = int(p.qty, 1, 99, 1);
@@ -383,10 +380,26 @@ const H = {
     const s = st.stats.find((x) => x.id === p.id);
     if (!s || s.void) return 'Already removed';
     if (ev.pk !== st.commish && ev.pk !== s.by) return 'Only the commissioner or whoever logged it can remove it';
-    if (st.phase === 'done' && ev.pk !== st.commish) return 'Season is over';
+    if (st.phase === 'done') return 'Season is over — results are final';
     s.void = true;
     const f = st.feed.find((x) => x.id === s.id); if (f) f.void = true;
     say(st, ev, '🚫', `${who(st, ev.pk)} struck "${ename(st, s.eid)}: ${s.label}" from the record`);
+  },
+  'stat.dispute'(st, ev, p) {
+    const s = st.stats.find((x) => x.id === p.id);
+    if (!s || s.void) return 'Already struck';
+    if (st.phase !== 'season') return 'Season is over';
+    if (!member(st, ev.pk)) return 'Join the league first';
+    if (s.disputed) return 'Already disputed';
+    s.disputed = ev.pk; s.why = str(p.why, 140);
+    say(st, ev, '⚠️', `${who(st, ev.pk)} disputed "${ename(st, s.eid)}: ${s.label}"${s.why ? ` — “${s.why}”` : ''}`);
+  },
+  'stat.keep'(st, ev, p) {
+    const s = st.stats.find((x) => x.id === p.id);
+    if (!s || s.void || !s.disputed) return 'Nothing to resolve';
+    if (ev.pk !== st.commish) return 'Only the commissioner can settle disputes';
+    s.disputed = null; s.kept = true;
+    say(st, ev, '⚖️', `Commish ruled "${ename(st, s.eid)}: ${s.label}" stands`);
   },
   chat(st, ev, p) {
     const m = member(st, ev.pk);
@@ -405,6 +418,7 @@ export function reduce(events, opt = {}) {
   let maxS = 0;
   for (const ev of sortEvents(events)) {
     if (ev.s > maxS) maxS = ev.s;
+    if (st.exists) settle(st, ev.at);
     const h = H[ev.t];
     let err = 'Unknown action';
     if (h && (st.exists || ev.t === 'create')) {
@@ -453,6 +467,20 @@ export function scores(st) {
     }
   }
   return { ent, team };
+}
+
+// When a timed points race ends (seconds), or 0 if it runs until the commissioner ends it.
+export const endsAt = (st) => (isRace(st) && st.settings.lengthDays && st.startedAt ? st.startedAt + st.settings.lengthDays * 86400 : 0);
+function finish(st, at, why) {
+  st.phase = 'done'; st.endedAt = at;
+  const top = standings(st)[0];
+  st.feed.push({ id: 'end:' + at, at, k: 'sys', icon: '🏆', text: `${why}${top ? ` ${who(st, top.pk)} takes the title` : ''}` });
+}
+// Apply a timed ending that has passed. Deterministic given the same clock value.
+export function settle(st, now) {
+  const e = endsAt(st);
+  if (st.phase === 'season' && e && now >= e) finish(st, e, 'Time’s up!');
+  return st;
 }
 
 function beginWeek(st, n) {

@@ -37,7 +37,7 @@ export const TEMPLATES = [
       c('Posts something unhinged', -3), c('Gets sued', -6), c('Layoffs', -8), c('“Excited to announce”', 1)],
   },
   {
-    solo: true, id: 'house', emoji: '🏠', title: 'House League', blurb: 'Roommates & the group chat, finally held accountable.',
+    solo: true, format: 'points', lengthDays: 30, id: 'house', emoji: '🏠', title: 'House League', blurb: 'Roommates & the group chat, finally held accountable.',
     suggest: 'The Chore Wars', poolHint: 'Everyone in the house or group chat…',
     cats: [c('Cooks for the group', 5), c('Does the dishes unprompted', 3), c('Hits the gym', 2), c('Goes on a date', 5),
       c('Late to plans', -3), c('Bails last minute', -6), c('Texts the ex', -5), c('Leaves a voicemail', 1)],

@@ -5,7 +5,7 @@
 // only ever see ciphertext. Clients re-upload anything a relay has lost.
 
 import { schnorr, sha256, bytesToHex, hexToBytes, randomBytes } from './vendor/noble.js';
-import { reduce, normName } from './core.js';
+import { reduce, normName, settle, endsAt } from './core.js';
 
 export const DEFAULT_RELAYS = [
   'wss://nos.lol', 'wss://relay.primal.net', 'wss://nostr.mom', 'wss://offchain.pub',
@@ -141,7 +141,7 @@ export class League {
     this.syncTimer = setTimeout(() => { this.synced = true; this.touch(); }, 7000);
     return this;
   }
-  close() { clearTimeout(this.syncTimer); this.relays.forEach((r) => r.close()); this.listeners.clear(); }
+  close() { clearTimeout(this.syncTimer); clearTimeout(this.endT); this.relays.forEach((r) => r.close()); this.listeners.clear(); }
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   touch() {
     if (this.touching) return;
@@ -193,7 +193,11 @@ export class League {
     this.dirtyT = setTimeout(() => { this.dirtyT = null; this.recompute(); this.touch(); this.save(); }, 25);
   }
   recompute() {
-    this.state = reduce([...this.parsed.values()], { commishPrefix: this.commishPrefix });
+    this.state = settle(reduce([...this.parsed.values()], { commishPrefix: this.commishPrefix }), Date.now() / 1000);
+    // Wake up when a timed race runs out so everyone sees the final results without reloading.
+    clearTimeout(this.endT);
+    const e = endsAt(this.state), wait = e * 1000 - Date.now();
+    if (this.state.phase === 'season' && e && wait > 0 && wait < 2 ** 31) this.endT = setTimeout(() => { this.recompute(); this.touch(); }, wait + 500);
     if (this.state.exists) rememberLeague(this.code, { name: this.state.name, emoji: this.state.emoji });
     // Tell the user if something they just did lost a race.
     for (const [id, t] of this.mine) {
@@ -241,7 +245,7 @@ export class League {
     const raw = await this.seal(t, p, this.state.maxS + 1);
     const parsed = await this.unseal(raw, false);
     this.parsed.set(raw.id, parsed);
-    const next = reduce([...this.parsed.values()], { commishPrefix: this.commishPrefix });
+    const next = settle(reduce([...this.parsed.values()], { commishPrefix: this.commishPrefix }), Date.now() / 1000);
     if (next.rejected.has(raw.id)) { this.parsed.delete(raw.id); return { err: next.rejected.get(raw.id) }; }
     this.raw.set(raw.id, raw); this.state = next; this.mine.set(raw.id, Date.now());
     if (next.exists) rememberLeague(this.code, { name: next.name, emoji: next.emoji });
