@@ -75,6 +75,9 @@ class Relay {
     ws.onopen = () => {
       this.open = true; this.tries = 0; this.synced = false; this.page = { n: 0, oldest: Infinity };
       this.send(['REQ', 'm', { kinds: [KIND], '#t': [this.lg.tag] }]);
+      // Safety net: relays occasionally drop live updates, so re-ask for recent events now and then.
+      clearInterval(this.poll);
+      this.poll = setInterval(() => this.send(['REQ', 'r' + (++this.pg), { kinds: [KIND], '#t': [this.lg.tag], since: Math.floor(Date.now() / 1000) - 900 }]), 20000);
       this.lg.touch();
     };
     ws.onmessage = (m) => {
@@ -99,7 +102,7 @@ class Relay {
         this.lg.touch();
       }
     };
-    ws.onclose = () => { if (this.ws === ws) { this.open = false; this.lg.touch(); this.retry(); } };
+    ws.onclose = () => { if (this.ws === ws) { clearInterval(this.poll); this.open = false; this.lg.touch(); this.retry(); } };
     ws.onerror = () => { try { ws.close(); } catch (e) {} };
   }
   retry() {
@@ -109,7 +112,7 @@ class Relay {
   }
   send(msg) { if (this.open) { try { this.ws.send(JSON.stringify(msg)); } catch (e) {} } }
   push(id) { const raw = this.lg.raw.get(id); if (raw && this.open) this.send(['EVENT', raw]); }
-  close() { this.dead = true; try { this.ws && this.ws.close(); } catch (e) {} }
+  close() { this.dead = true; clearInterval(this.poll); try { this.ws && this.ws.close(); } catch (e) {} }
 }
 
 // ---- league ------------------------------------------------------------------

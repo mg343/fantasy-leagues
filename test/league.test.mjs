@@ -7,7 +7,7 @@ import { scores, standings, matchups, draftSlot, pairsFor, reduce, settle, endsA
 const relays = process.argv.slice(2);
 if (!relays.length) { console.error('usage: node test/league.test.mjs <relay-url>...'); process.exit(2); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const until = async (fn, what, ms = 15000) => { const t = Date.now(); while (!fn()) { if (Date.now() - t > ms) throw new Error('timeout: ' + what); await sleep(50); } };
+const until = async (fn, what, ms = relays.some((r) => r.startsWith('wss:')) ? 45000 : 15000) => { const t = Date.now(); while (!fn()) { if (Date.now() - t > ms) throw new Error('timeout: ' + what); await sleep(50); } };
 const ok = async (p) => { const r = await p; assert.ok(r.ok, r.err); return r; };
 const bad = async (p, re) => { const r = await p; assert.ok(r.err, 'expected rejection'); if (re) assert.match(r.err, re); };
 
@@ -101,7 +101,7 @@ const cRoster = () => C.state.rosters[C.me.pk];
 const give = A.state.rosters[A.me.pk][0], get = cRoster()[0];
 await bad(A.act('trade.offer', { to: C.me.pk, give: [give], get: [] }), /even/);
 const tr = await ok(A.act('trade.offer', { to: C.me.pk, give: [give], get: [get] }));
-await until(() => C.state.trades.length === 1, 'offer arrives');
+await until(() => C.state.trades.length === 1 && B.state.trades.length === 1, 'offer arrives');
 await bad(B.act('trade.accept', { id: tr.id }), /Not your offer/);
 await ok(C.act('trade.accept', { id: tr.id }));
 await until(() => A.state.owner[get] === A.me.pk, 'trade settles');
@@ -214,12 +214,12 @@ assert.ok(reduce([...V.parsed.values(), lateMember], { commishPrefix: V.commishP
 [T2, V].forEach((l) => l.close());
 
 // pick timer: once the clock runs out, any manager's client may submit the top available player
-const T = await createLeague({ name: 'Timer', me: 'Tia', pin: 'tia-pin', settings: { rosterSize: 1, starters: 1, pickSecs: 1 }, cats, pool: pool.slice(0, 4) }, { relays });
+const T = await createLeague({ name: 'Timer', me: 'Tia', pin: 'tia-pin', settings: { rosterSize: 1, starters: 1, pickSecs: 8 }, cats, pool: pool.slice(0, 4) }, { relays });
 const U = await new League(T.code, { relays }).init(); await until(() => U.synced && U.state.exists, 'timer league sync');
 U.login('Uma', 'uma-pin'); await ok(U.act('join', { name: 'Uma' })); await until(() => T.state.members.length === 2, 'uma joins');
 await ok(T.act('draft.start', { order: [T.me.pk, U.me.pk] })); await until(() => U.state.phase === 'draft', 'timer draft');
 await bad(U.act('pick', { n: 0, eid: 'e0', auto: true }), /Not your pick/);   // clock still running
-await sleep(2100);
+await sleep(8600);
 await bad(U.act('pick', { n: 0, eid: 'e2', auto: true }), /Not your pick/);   // must be the top available
 await ok(U.act('pick', { n: 0, eid: 'e0', auto: true }));
 await until(() => T.state.draft.picks.length === 1 && T.state.draft.picks[0].auto, 'auto-pick lands');
