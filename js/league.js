@@ -1,5 +1,5 @@
 import { html, useState, useEffect, useRef, useNow, go, toast, ask, ago, assignEmoji, Av, Ini, Pts, num, sgn, plural, Sheet, Seg, Step, copy, leagueUrl } from './ui.js';
-import { League, rid } from './net.js';
+import { League, rid, validPin, PIN_MIN } from './net.js';
 import { scores, standings, matchups, draftSlot, clockStart, available, roundDone, normName } from './core.js';
 
 // ---------------------------------------------------------------- plumbing
@@ -98,17 +98,17 @@ function WhoAreYou({ x }) {
   const { lg, st } = x;
   const [name, setName] = useState('');
   const [pin, setPin] = useState('');
-  const [needPin, setNeedPin] = useState(false);
   const [busy, setBusy] = useState(false);
+  const pinRef = useRef(null);
   const setup = st.phase === 'setup';
-  const enter = async (n, p) => {
-    n = n.trim();
+  const known = !!lg.memberFor(name);
+  const enter = async (e) => {
+    e.preventDefault();
+    const n = name.trim();
     if (!n) return toast('Type your name', 'err');
-    const r = lg.login(n, p);
-    if (r === 'taken') {
-      setName(n); setNeedPin(true);
-      return toast(p ? 'Wrong PIN for that name' : `${lg.memberFor(n).name} set a PIN — enter it to sign in`, 'err');
-    }
+    if (!validPin(pin)) return toast(known ? 'Enter your PIN' : `Choose a PIN of at least ${PIN_MIN} characters`, 'err');
+    const r = lg.login(n, pin);
+    if (r === 'taken') return toast('Wrong PIN for that name', 'err');
     if (r === 'member') return toast(`Welcome back, ${lg.member.name}`);
     if (!setup) { lg.logout(); return toast('No manager by that name — the draft already happened', 'err'); }
     setBusy(true);
@@ -118,15 +118,15 @@ function WhoAreYou({ x }) {
   };
   return html`<div class="card yellow" style="margin-bottom:16px">
     <h3>${setup ? '👋 You’re invited' : 'Who are you?'}</h3>
-    ${setup && html`<p style="margin-bottom:10px">Join <b>${st.name}</b> as a manager. No account — just a name.</p>`}
-    <form class="row wrapx" onSubmit=${(e) => { e.preventDefault(); enter(name, pin); }}>
+    ${setup && html`<p style="margin-bottom:10px">Join <b>${st.name}</b> as a manager. No account — just a name and a PIN.</p>`}
+    <form class="row wrapx" onSubmit=${enter}>
       <input class="in grow" style="min-width:150px" maxlength="24" placeholder="Your name" aria-label="Your name" autocomplete="nickname" value=${name} onInput=${(e) => setName(e.target.value)} />
-      ${(needPin || pin) && html`<input class="in" style="width:110px" maxlength="32" placeholder="PIN" aria-label="PIN" value=${pin} onInput=${(e) => setPin(e.target.value)} />`}
-      <button class="btn dark" disabled=${busy}>${setup ? 'Join league' : 'Sign in'}</button>
+      <input class="in" style="width:120px" type="password" maxlength="32" placeholder="PIN" aria-label="PIN" autocomplete="off" ref=${pinRef} value=${pin} onInput=${(e) => setPin(e.target.value)} />
+      <button class="btn dark" disabled=${busy}>${setup && !known ? 'Join league' : 'Sign in'}</button>
     </form>
-    ${!needPin && !pin && setup && html`<button class="btn ghost sm" onClick=${() => setNeedPin(true)}>+ add a PIN (optional)</button>`}
-    ${st.members.length > 0 && html`<p class="small" style="margin:10px 0 6px">${setup ? 'Already joined? Tap your name:' : 'Managers — tap your name to sign in. Everyone else can watch.'}</p>
-      <div class="chips">${st.members.map((m) => html`<button class="chip" onClick=${() => enter(m.name, normName(m.name) === normName(name) ? pin : '')}><${Av} pk=${m.pk} size="sm" />${m.name}</button>`)}</div>`}
+    <p class="small" style="margin-top:8px">${known ? 'Enter the PIN you chose when you joined.' : setup ? `New here? Choose a PIN (${PIN_MIN}+ characters). You’ll need it to sign in again.` : 'Managers sign in with their name and PIN. Everyone else can watch.'}</p>
+    ${st.members.length > 0 && html`<p class="small" style="margin:10px 0 6px">${setup ? 'Already joined? Tap your name, then enter your PIN:' : 'Tap your name, then enter your PIN:'}</p>
+      <div class="chips">${st.members.map((m) => html`<button type="button" class="chip ${normName(m.name) === normName(name) ? 'on' : ''}" onClick=${() => { setName(m.name); setPin(''); if (pinRef.current) pinRef.current.focus(); }}><${Av} pk=${m.pk} size="sm" />${m.name}</button>`)}</div>`}
   </div>`;
 }
 
@@ -139,7 +139,7 @@ function MeSheet({ x, onClose }) {
       <div class="row"><input id="tn" class="in grow" maxlength="32" value=${team} onInput=${(e) => setTeam(e.target.value)} /><button class="btn dark">Save</button></div>
     </form>
     <div><label class="f">Invite link</label><${LinkBox} code=${code} /></div>
-    <p class="small muted">On another device? Open the invite link and enter the same name${' '}(and PIN, if you set one).</p>
+    <p class="small muted">On another device? Open the invite link and sign in with the same name and PIN.</p>
     <div class="row"><button class="btn grow" onClick=${() => { lg.logout(); onClose(); }}>Switch user</button><a class="btn grow" href="#/">All leagues</a></div>
   </div><//>`;
 }

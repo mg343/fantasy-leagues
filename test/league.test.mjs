@@ -14,19 +14,21 @@ const bad = async (p, re) => { const r = await p; assert.ok(r.err, 'expected rej
 const pool = 'Ana,Ben,Cy,Dee,Eli,Fay,Gus,Hal,Ivy,Jo,Kit,Lou,Max,Nia'.split(',').map((name, i) => ({ id: 'e' + i, name }));
 const cats = [{ id: 'a', name: 'Aced it', pts: 10 }, { id: 'b', name: 'Bailed', pts: -4 }];
 
-const A = await createLeague({ name: 'Test League', me: 'Alice', pin: '', settings: { rosterSize: 3, starters: 2, numRounds: 2 }, cats, pool }, { relays });
+const A = await createLeague({ name: 'Test League', me: 'Alice', pin: 'alice-pin', settings: { rosterSize: 3, starters: 2, numRounds: 2 }, cats, pool }, { relays });
 const open = async (name, pin) => { const l = await new League(A.code, { relays }).init(); await until(() => l.synced && l.state.exists, name + ' sync'); return l; };
 const B = await open('Bob'), C = await open('Cara');
 
-// identity: name + optional PIN
+// identity: name + PIN
 assert.equal(B.login('Alice', 'wrong'), 'taken');
+assert.equal(B.login('Bob', ''), 'pin');             // a PIN is always required
+assert.equal(B.login('Bob', '12'), 'pin');
 assert.equal(B.login('Bob', '1234'), 'new');
 await ok(B.act('join', { name: 'Bob' }));
-assert.equal(C.login('Cara'), 'new');
+assert.equal(C.login('Cara', 'cara-pin'), 'new');
 await ok(C.act('join', { name: 'Cara', team: 'Cara Bears' }));
 await until(() => A.state.members.length === 3, 'members propagate');
 const D = await open('dup');
-assert.equal(D.login('bob', ''), 'taken');           // right name, wrong PIN
+assert.equal(D.login('bob', '9999'), 'taken');       // right name, wrong PIN
 assert.equal(D.login(' BOB ', '1234'), 'member');   // same person, new device
 await bad(D.act('join', { name: 'Bob' }), /Already/);
 D.close();
@@ -114,9 +116,9 @@ assert.equal(E.state.phase, 'done');
 assert.deepEqual(standings(E.state).map((r) => r.pk), standings(A.state).map((r) => r.pk));
 assert.equal(E.state.rejected.size, A.state.rejected.size);
 // pick timer: once the clock runs out, any manager's client may submit the top available player
-const T = await createLeague({ name: 'Timer', me: 'Tia', settings: { rosterSize: 1, starters: 1, pickSecs: 1 }, cats, pool: pool.slice(0, 4) }, { relays });
+const T = await createLeague({ name: 'Timer', me: 'Tia', pin: 'tia-pin', settings: { rosterSize: 1, starters: 1, pickSecs: 1 }, cats, pool: pool.slice(0, 4) }, { relays });
 const U = await new League(T.code, { relays }).init(); await until(() => U.synced && U.state.exists, 'timer league sync');
-U.login('Uma'); await ok(U.act('join', { name: 'Uma' })); await until(() => T.state.members.length === 2, 'uma joins');
+U.login('Uma', 'uma-pin'); await ok(U.act('join', { name: 'Uma' })); await until(() => T.state.members.length === 2, 'uma joins');
 await ok(T.act('draft.start', { order: [T.me.pk, U.me.pk] })); await until(() => U.state.phase === 'draft', 'timer draft');
 await bad(U.act('pick', { n: 0, eid: 'e0', auto: true }), /Not your pick/);   // clock still running
 await sleep(2100);

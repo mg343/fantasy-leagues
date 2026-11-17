@@ -37,12 +37,14 @@ export function relayList() {
 }
 
 // ---- identity & invite codes -------------------------------------------------
-// Like when2meet: you are whatever name (plus optional PIN) you type. Your signing
+// Like when2meet: you are the name and PIN you type. Your signing
 // key is derived from league seed + name + PIN, so the same name works on any device.
 export function deriveIdentity(seed, name, pin) {
   const sk = hash(`anyleague:id:${seed}:${normName(name)}:${pin || ''}`);
   return { name: String(name).trim(), sk: bytesToHex(sk), pk: bytesToHex(schnorr.getPublicKey(sk)) };
 }
+export const PIN_MIN = 4;
+export const validPin = (pin) => typeof pin === 'string' && pin.length >= PIN_MIN;
 export const newSeed = () => b64url(randomBytes(12));
 export const makeCode = (seed, pk) => seed + pk.slice(0, 12);
 export function parseCode(code) {
@@ -215,8 +217,9 @@ export class League {
 
   // ---- identity ----
   memberFor(name) { return this.state.members.find((m) => normName(m.name) === normName(name)); }
-  // → 'member' | 'new' | 'taken'
+  // → 'member' | 'new' | 'taken' (wrong PIN) | 'pin' (PIN missing or too short)
   login(name, pin) {
+    if (!validPin(pin)) return 'pin';
     const id = deriveIdentity(this.seed, name, pin);
     const m = this.memberFor(name);
     if (m && m.pk !== id.pk) return 'taken';
@@ -252,6 +255,7 @@ export class League {
 }
 
 export async function createLeague({ name, desc, emoji, me, pin, team, settings, cats, pool }, opts) {
+  if (!validPin(pin)) throw new Error(`Choose a PIN of at least ${PIN_MIN} characters`);
   const seed = newSeed();
   const id = deriveIdentity(seed, me, pin);
   const code = makeCode(seed, id.pk);

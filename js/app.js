@@ -1,5 +1,5 @@
 import { html, render, useState, useEffect, useHash, go, Overlays, toast, ago } from './ui.js';
-import { createLeague, myLeagues, forgetLeague, parseCode, rid } from './net.js';
+import { createLeague, myLeagues, forgetLeague, parseCode, rid, validPin, PIN_MIN } from './net.js';
 import { TEMPLATES } from './templates.js';
 import { LeaguePage } from './league.js';
 
@@ -38,7 +38,7 @@ function Home() {
     <div class="sec" style="margin-top:0">Fantasy 101 — how this works</div>
     <div class="card"><div class="how">
       <div><p><b>Someone starts a league</b><span>They’re the commissioner. They pick what’s being drafted (the “player pool”) and what earns points.</span></p></div>
-      <div><p><b>Friends join with a link</b><span>Each friend is a manager with their own team. Type a name — that’s the whole sign-up.</span></p></div>
+      <div><p><b>Friends join with a link</b><span>Each friend is a manager with their own team. Type a name and a PIN — that’s the whole sign-up.</span></p></div>
       <div><p><b>You draft</b><span>Take turns picking players in a snake draft (1→8, then 8→1). Once someone’s taken, they’re off the board.</span></p></div>
       <div><p><b>Set a lineup</b><span>Each round you choose starters. Only starters score — your bench is insurance. Lineups lock when the round starts.</span></p></div>
       <div><p><b>Real life happens, points get logged</b><span>Your player aces the exam, lands the scoop, cries on camera? Anyone logs it, the commissioner can strike bad calls.</span></p></div>
@@ -53,11 +53,11 @@ function Create({ tid }) {
   const [name, setName] = useState('');
   const [me, setMe] = useState('');
   const [pin, setPin] = useState('');
-  const [showPin, setShowPin] = useState(false);
   const [busy, setBusy] = useState(false);
   const submit = async (e) => {
     e.preventDefault();
     if (!me.trim()) return toast('Add your name', 'err');
+    if (!validPin(pin)) return toast(`Choose a PIN of at least ${PIN_MIN} characters`, 'err');
     setBusy(true);
     try {
       const lg = await createLeague({
@@ -78,9 +78,10 @@ function Create({ tid }) {
         <input id="ln" class="in" maxlength="60" placeholder=${tpl.suggest || 'The Big League'} value=${name} onInput=${(e) => setName(e.target.value)} /></div>
       <div><label class="f" for="mn">Your name</label>
         <input id="mn" class="in" maxlength="24" placeholder="What your friends call you" autocomplete="nickname" value=${me} onInput=${(e) => setMe(e.target.value)} />
-        ${showPin
-    ? html`<input class="in" style="margin-top:8px" maxlength="32" placeholder="PIN (optional — stops friends from signing in as you)" value=${pin} onInput=${(e) => setPin(e.target.value)} />`
-    : html`<button type="button" class="btn ghost sm" onClick=${() => setShowPin(true)}>+ add a PIN (optional)</button>`}</div>
+</div>
+      <div><label class="f" for="pn">PIN</label>
+        <input id="pn" class="in" type="password" maxlength="32" placeholder=${`At least ${PIN_MIN} characters`} autocomplete="new-password" value=${pin} onInput=${(e) => setPin(e.target.value)} />
+        <p class="small muted" style="margin-top:6px">You’ll need your name and this PIN to sign in. There’s no reset, so pick one you’ll remember.</p></div>
       <button class="btn pri big" disabled=${busy}>${busy ? 'Creating…' : 'Create league →'}</button>
       <p class="small muted center">You’ll be the commissioner. Next: invite friends, build the player pool, tune the rules.</p>
     </form>

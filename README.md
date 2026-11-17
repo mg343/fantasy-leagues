@@ -5,7 +5,7 @@ Fantasy leagues for anything — friends, journalists, senators, a reality TV ca
 ## How it plays
 
 1. Someone starts a league (they're the commissioner), picks a template, and shares the link.
-2. Friends open the link and type a name. That's the whole sign-up (optional PIN).
+2. Friends open the link and type a name and a PIN. That's the whole sign-up.
 3. Everyone builds the player pool and the commissioner tunes scoring rules.
 4. Snake draft, live or slow, with an optional pick timer.
 5. Each round: set starters, log points when things happen in real life, win your matchup.
