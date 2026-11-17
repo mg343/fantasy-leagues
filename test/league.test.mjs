@@ -94,7 +94,7 @@ await ok(C.act('trade.accept', { id: tr.id }));
 await until(() => A.state.owner[get] === A.me.pk, 'trade settles');
 assert.equal(A.state.owner[give], C.me.pk);
 
-// rounds & standings
+// rounds & standings (see bottom for the pick-timer test)
 await ok(A.act('advance', { n: 2 }));
 await bad(A.act('advance', { n: 2 }), /already/i);
 await until(() => B.state.round === 2, 'round 2');
@@ -113,6 +113,18 @@ await until(() => E.parsed.size === A.parsed.size, 'full history from relay');
 assert.equal(E.state.phase, 'done');
 assert.deepEqual(standings(E.state).map((r) => r.pk), standings(A.state).map((r) => r.pk));
 assert.equal(E.state.rejected.size, A.state.rejected.size);
+// pick timer: once the clock runs out, any manager's client may submit the top available player
+const T = await createLeague({ name: 'Timer', me: 'Tia', settings: { rosterSize: 1, starters: 1, pickSecs: 1 }, cats, pool: pool.slice(0, 4) }, { relays });
+const U = await new League(T.code, { relays }).init(); await until(() => U.synced && U.state.exists, 'timer league sync');
+U.login('Uma'); await ok(U.act('join', { name: 'Uma' })); await until(() => T.state.members.length === 2, 'uma joins');
+await ok(T.act('draft.start', { order: [T.me.pk, U.me.pk] })); await until(() => U.state.phase === 'draft', 'timer draft');
+await bad(U.act('pick', { n: 0, eid: 'e0', auto: true }), /Not your pick/);   // clock still running
+await sleep(2100);
+await bad(U.act('pick', { n: 0, eid: 'e2', auto: true }), /Not your pick/);   // must be the top available
+await ok(U.act('pick', { n: 0, eid: 'e0', auto: true }));
+await until(() => T.state.draft.picks.length === 1 && T.state.draft.picks[0].auto, 'auto-pick lands');
+assert.equal(T.state.owner.e0, T.me.pk);
+[T, U].forEach((l) => l.close());
 console.log(`PASS — ${A.parsed.size} events, ${A.state.feed.length} feed items, champion: ${A.state.members.find((m) => m.pk === standings(A.state)[0].pk).name}`);
 [A, B, C, E].forEach((l) => l.close());
 process.exit(0);

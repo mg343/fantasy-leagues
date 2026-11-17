@@ -233,6 +233,8 @@ export class League {
   // Validates locally against the rules first; only valid events are published.
   async act(t, p = {}) {
     if (!this.me) return { err: 'Tell us who you are first' };
+    // Don't act on a stale cache: wait (briefly) for the first relay sync so the event is ordered after what it builds on.
+    for (let i = 0; !this.synced && t !== 'create' && i < 80; i++) await new Promise((r) => setTimeout(r, 100));
     const raw = await this.seal(t, p, this.state.maxS + 1);
     const parsed = await this.unseal(raw, false);
     this.parsed.set(raw.id, parsed);
