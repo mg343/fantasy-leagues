@@ -1,6 +1,6 @@
 import { html, useState, useEffect, useRef, useNow, go, toast, ask, parseNames, ago, assignEmoji, Av, Ini, Pts, num, sgn, plural, Sheet, Seg, Step, copy, leagueUrl } from './ui.js';
 import { League, rid, validPin, PIN_MIN } from './net.js';
-import { scores, standings, matchups, draftSlot, clockStart, available, roundDone, normName, PERIODS, fitRoster } from './core.js';
+import { scores, standings, matchups, draftSlot, clockStart, available, roundDone, normName, PERIODS, fitRoster, isSolo, selfId } from './core.js';
 
 // ---------------------------------------------------------------- plumbing
 function useLeague(code) {
@@ -36,7 +36,8 @@ export function LeaguePage({ code, tab }) {
       : html`<div class="logo pulse">ANY<span>LEAGUE</span></div><p class="muted" style="margin-top:12px">Finding your league…</p>`}</div></div>`;
   }
   assignEmoji(st.members.map((m) => m.pk));
-  const tabs = TABS[st.phase];
+  const solo = isSolo(st);
+  const tabs = solo && st.phase !== 'setup' ? TABS.season.filter((t) => t[0] !== 'team' && t[0] !== 'players') : TABS[st.phase];
   const cur = tabs.some((t) => t[0] === tab) ? tab : tabs[0][0];
   const mem = lg.member, isC = lg.isCommish;
   const run = async (t, p, okMsg) => {
@@ -49,7 +50,7 @@ export function LeaguePage({ code, tab }) {
   const name = (pk) => (st.members.find((m) => m.pk === pk) || {}).name || '—';
   const team = (pk) => (st.members.find((m) => m.pk === pk) || {}).team || '—';
   const P = st.settings.period || 'Week';
-  const x = { lg, st, sc, mem, isC, run, me: mem ? mem.pk : null, open: setSheet, canScore, name, team, code, P, p: P.toLowerCase() };
+  const x = { lg, st, sc, mem, isC, run, me: mem ? mem.pk : null, open: setSheet, canScore, name, team, code, P, p: P.toLowerCase(), solo };
 
   const seenKey = 'al:seen:' + code;
   const chatN = st.feed.filter((f) => f.k === 'chat' && f.pk !== x.me).length;
@@ -122,7 +123,7 @@ function WhoAreYou({ x }) {
   };
   return html`<div class="card yellow" style="margin-bottom:16px">
     <h3>${setup ? '👋 You’re invited' : 'Who are you?'}</h3>
-    ${setup && html`<p style="margin-bottom:10px">Join <b>${st.name}</b> as a manager. No account — just a name and a PIN.</p>`}
+    ${setup && html`<p style="margin-bottom:10px">Join <b>${st.name}</b>. No account — just a name and a PIN.</p>`}
     <form class="row wrapx" onSubmit=${enter}>
       <input class="in grow" style="min-width:150px" maxlength="24" placeholder="Your name" aria-label="Your name" autocomplete="nickname" value=${name} onInput=${(e) => setName(e.target.value)} />
       <input class="in" style="width:120px" type="password" maxlength="32" placeholder="PIN" aria-label="PIN" autocomplete="off" ref=${pinRef} value=${pin} onInput=${(e) => setPin(e.target.value)} />
@@ -157,40 +158,56 @@ function LinkBox({ code }) {
 
 // ---------------------------------------------------------------- lobby
 function Lobby({ x }) {
-  const { st, isC, mem, run, me, code, open, name } = x;
+  const { st, isC, mem, run, me, code, open, name, solo, P, p } = x;
   const need = st.members.length * st.settings.rosterSize;
-  const fit = fitRoster(st), self = st.settings.selfDraft;
+  const fit = fitRoster(st), set = st.settings, h2h = set.format === 'h2h';
   const checks = [
-    [st.members.length >= 2, `${plural(st.members.length, 'manager')}`, 'at least 2 managers'],
-    [fit >= 1, fit >= 1 ? `${plural(st.pool.size, 'name')} to draft → teams of ${fit}` : `${plural(st.pool.size, 'name')} to draft`, 'at least one name to draft per manager'],
+    [st.members.length >= 2, `${plural(st.members.length, 'person')} in the league`.replace('persons', 'people'), 'at least 2 people'],
+    ...(solo ? [] : [[fit >= 1, fit >= 1 ? `${plural(st.pool.size, 'name')} to draft → teams of ${fit}` : `${plural(st.pool.size, 'name')} to draft`, 'at least one name to draft per person']]),
     [st.cats.length > 0, `${plural(st.cats.length, 'scoring rule')}`, 'at least one scoring rule'],
   ];
   const problems = checks.filter((c) => !c[0]).map((c) => c[2]);
-  const order = st.preorder && st.preorder.length === st.members.length ? st.preorder : null;
+  const order = !solo && st.preorder && st.preorder.length === st.members.length ? st.preorder : null;
   const shuffle = () => {
     const o = st.members.map((m) => m.pk);
     for (let i = o.length - 1; i > 0; i--) { const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1); [o[i], o[j]] = [o[j], o[i]]; }
     return o;
   };
   const start = async () => {
-    if (!await ask('Start the draft?', `Joining closes. ${order ? `${name(order[0])} picks first.` : 'The draft order will be randomized.'} ${plural(st.members.length, 'manager')}, ${fit} ${fit === 1 ? 'pick' : 'picks'} each.`, 'Start draft')) return;
-    run('draft.start', { order: order || shuffle() });
+    const ok = solo
+      ? await ask('Start the season?', `Joining closes and ${P} 1 starts now. ${st.members.length} people, ${plural(set.numRounds, p)}.`, 'Start season')
+      : await ask('Start the draft?', `Joining closes. ${order ? `${name(order[0])} picks first.` : 'The draft order will be randomized.'} ${st.members.length} people, ${fit} ${fit === 1 ? 'pick' : 'picks'} each.`, 'Start draft');
+    if (ok) run('draft.start', { order: order || shuffle() });
   };
   const list = order ? order.map((pk) => st.members.find((m) => m.pk === pk)) : st.members;
-  const startBtn = html`<button class="btn pri big" disabled=${problems.length > 0} onClick=${start}>🚨 Start the draft</button>`;
+  const startBtn = html`<button class="btn pri big" disabled=${problems.length > 0} onClick=${start}>${solo ? '▶️ Start the season' : '🚨 Start the draft'}</button>`;
+  const c0 = st.cats[0], ex = c0 ? `“${c0.name}” (${sgn(c0.pts)})` : 'something on the scoring list';
+  const wk = h2h ? `Each ${p}, everyone is matched against one other person. Higher score wins the ${p}.` : `No matchups — it’s a race for the most points over ${plural(set.numRounds, p)}.`;
+  const steps = solo ? [
+    ['Everyone joins with the link below.', st.members.length > 1 ? `${st.members.length} in so far.` : 'Send it to the group chat.'],
+    ['Do things, log points.', `When someone does ${ex}, anyone taps “Log points”, picks the person and what they did.`],
+    [h2h ? `Win your ${p}.` : 'Climb the standings.', wk],
+    ['Crown a champion.', `After ${plural(set.numRounds, p)} the best ${h2h ? 'record' : 'score'} wins.${set.punishment ? ` Last place: ${set.punishment}.` : ''}`],
+  ] : [
+    ['Build the list of who can be drafted.', `${plural(st.pool.size, 'name')} so far${st.hint ? ` — ${st.hint.replace(/…$/, '').toLowerCase()}` : ''}. Aim for 3–4 per person playing.`],
+    ['Everyone joins, then you draft.', `Take turns claiming names until each of you has a team${fit >= 1 ? ` of ${fit}` : ''}. Once a name is taken, it’s that person’s alone.`],
+    ['Your team does things, you score.', `When someone you drafted does ${ex}, anyone logs it and the points go to you${set.starters < set.rosterSize ? ' (if you’re starting them)' : ''}.`],
+    [h2h ? `Win your ${p}, win the league.` : 'Climb the standings.', `${wk} After ${plural(set.numRounds, p)}, best ${h2h ? 'record' : 'score'} is champion.`],
+  ];
   return html`<div>
-    ${isC && html`<div class="card" style="margin-bottom:14px"><h3>Before you draft</h3>
+    ${isC && html`<div class="card" style="margin-bottom:14px"><h3>${solo ? 'Before you start' : 'Before you draft'}</h3>
       <div class="stack-s" style="margin-bottom:12px">${checks.map(([ok, label]) => html`<div class="row small" style="gap:8px"><span class="pill ${ok ? 'grn' : ''}" style="min-width:26px;justify-content:center">${ok ? '✓' : '·'}</span><span class=${ok ? '' : 'muted'}>${label}</span></div>`)}</div>
-      ${st.settings.draftNote && html`<p class="small" style="margin-bottom:10px">🗓 Draft: <b>${st.settings.draftNote}</b></p>`}
+      ${!solo && set.draftNote && html`<p class="small" style="margin-bottom:10px">🗓 Draft: <b>${set.draftNote}</b></p>`}
       ${startBtn}${problems.length > 0 && html`<p class="small muted center" style="margin-top:8px">Still need ${problems.join(' and ')}.</p>`}</div>`}
-    ${!isC && mem && html`<div class="card yellow" style="margin-bottom:14px"><b>✅ You’re in.</b> ${st.settings.draftNote ? html`Draft: <b>${st.settings.draftNote}</b>.` : html`Waiting for <b>${name(st.commish)}</b> to start the draft.`}
-      <div class="small" style="margin-top:4px">Meanwhile: name your team${st.settings.openPool ? ', add players to the pool,' : ''} and check the scoring rules below.</div></div>`}
-    ${!mem && st.settings.draftNote && html`<div class="banner" style="margin-bottom:14px">🗓 <span>Draft: <b>${st.settings.draftNote}</b></span></div>`}
+    ${!isC && mem && html`<div class="card yellow" style="margin-bottom:14px"><b>✅ You’re in.</b> ${!solo && set.draftNote ? html`Draft: <b>${set.draftNote}</b>.` : html`Waiting for <b>${name(st.commish)}</b> to start the ${solo ? 'season' : 'draft'}.`}</div>`}
+    ${!mem && !solo && set.draftNote && html`<div class="banner" style="margin-bottom:14px">🗓 <span>Draft: <b>${set.draftNote}</b></span></div>`}
+
+    <div class="card" style="margin-bottom:14px"><h3>How this league works</h3><div class="how">${steps.map(([b, t]) => html`<div><p><b>${b}</b><span>${t}</span></p></div>`)}</div></div>
 
     <div class="card"><h3>Invite your friends</h3><${LinkBox} code=${code} />
-      <p class="small muted" style="margin-top:8px">Anyone with this link can join until the draft starts.</p></div>
+      <p class="small muted" style="margin-top:8px">Anyone with this link can join until the ${solo ? 'season' : 'draft'} starts.</p></div>
 
-    <div class="sec">Managers <span class="n">${st.members.length}</span>${order && html`<span class="tiny muted" style="text-transform:none;letter-spacing:0">in draft order</span>`}</div>
+    <div class="sec">${solo ? 'Who’s playing' : 'Who’s in'} <span class="n">${st.members.length}</span>${order && html`<span class="tiny muted" style="text-transform:none;letter-spacing:0">in draft order</span>`}</div>
     <div class="list">${list.map((m, i) => html`<div class="li ${m.pk === me ? 'me' : ''}" key=${m.pk}>
       ${order && html`<span class="mono muted" style="width:18px">${i + 1}</span>`}
       <${Av} pk=${m.pk} /><div class="grow"><div class="t ell">${m.team}</div><div class="s">${m.name}${m.pk === st.commish ? ' · commissioner' : ''}${m.pk === me ? ' · you' : ''}</div></div>
@@ -198,24 +215,22 @@ function Lobby({ x }) {
       ${isC && m.pk !== me && html`<button class="x" aria-label=${'Remove ' + m.name} onClick=${async () => (await ask(`Remove ${m.name}?`, 'They can rejoin with the link.', 'Remove')) && run('kick', { pk: m.pk })}>✕</button>`}
     </div>`)}</div>
     <div class="row wrapx" style="margin-top:10px">
-      <span class="small muted grow" style="min-width:180px">${order ? 'Snake draft: the order reverses every round.' : 'Draft order is random. It’s revealed when the draft starts' + (isC ? ' — or reveal it now.' : '.')}</span>
-      ${isC && st.members.length > 1 && html`<button class="btn sm" onClick=${() => run('draft.order', { order: shuffle() })}>🎲 ${order ? 'Re-roll order' : 'Reveal draft order'}</button>`}
-      ${!isC && mem && html`<button class="btn sm ghost" onClick=${async () => (await ask('Leave this league?', 'You can rejoin before the draft.', 'Leave')) && run('leave')}>Leave league</button>`}
+      <span class="small muted grow" style="min-width:180px">${solo ? '' : order ? 'Snake draft: the order reverses every round.' : 'Draft order is random. It’s revealed when the draft starts' + (isC ? ' — or reveal it now.' : '.')}</span>
+      ${isC && !solo && st.members.length > 1 && html`<button class="btn sm" onClick=${() => run('draft.order', { order: shuffle() })}>🎲 ${order ? 'Re-roll order' : 'Reveal draft order'}</button>`}
+      ${!isC && mem && html`<button class="btn sm ghost" onClick=${async () => (await ask('Leave this league?', 'You can rejoin before it starts.', 'Leave')) && run('leave')}>Leave league</button>`}
     </div>
 
-    <div class="sec">Who gets drafted <span class="n">${st.pool.size}</span></div>
+    ${!solo && html`<div class="sec">Who can be drafted <span class="n">${st.pool.size}</span></div>
     <div class="card stack">
-      <p class="small">${self
-    ? html`<b>You draft each other.</b> Everyone who joins is automatically on the board. You can also add people who aren’t playing.`
-    : html`<b>You draft from this list</b>${st.hint ? ` — ${st.hint.replace(/…$/, '').toLowerCase()}` : ''}. Like NFL players in fantasy football: managers take turns claiming them, then score when they do things.`}
-        ${' '}<span class="muted">${st.settings.openPool ? 'Any manager can add names.' : 'Only the commissioner can add names.'}</span></p>
-      ${st.pool.size > 0 && html`<div class="chips">${[...st.pool.values()].map((e) => html`<span class="chip" key=${e.id} title=${e.note}><${Ini} e=${e} size="sm" /><span class="ell">${e.name}</span>${e.self ? html`<span class="tiny muted">manager</span>` : e.note && html`<span class="tiny muted ell">${e.note}</span>`}
+      <p class="small"><b>This is the list you’ll draft your teams from</b>${st.hint ? ` — ${st.hint.replace(/…$/, '').toLowerCase()}` : ''}.
+        ${' '}<span class="muted">${set.openPool ? 'Anyone in the league can add names.' : 'Only the commissioner can add names.'}</span></p>
+      ${st.pool.size > 0 && html`<div class="chips">${[...st.pool.values()].map((e) => html`<span class="chip" key=${e.id} title=${e.note}><${Ini} e=${e} size="sm" /><span class="ell">${e.name}</span>${e.self ? html`<span class="tiny muted">in the league</span>` : e.note && html`<span class="tiny muted ell">${e.note}</span>`}
         ${isC && !e.self && html`<button class="x" aria-label=${'Remove ' + e.name} onClick=${() => run('pool-', { id: e.id })}>✕</button>`}</span>`)}</div>`}
-      ${fit >= 1 && fit < st.settings.rosterSize && st.members.length > 1 && html`<div class="banner">💡 <span>Right now that’s <b>teams of ${fit}</b>. Add ${need - st.pool.size} more ${need - st.pool.size === 1 ? 'name' : 'names'} for teams of ${st.settings.rosterSize}${self ? ' — or invite more friends' : ''}.</span></div>`}
-      ${(isC || (mem && st.settings.openPool)) ? html`<${PoolAdd} x=${x} />` : !mem && html`<p class="small muted">Join to add names.</p>`}
-    </div>
+      ${st.members.length > 1 && fit < set.rosterSize && html`<div class="banner">💡 <span>${fit >= 1 ? html`Right now that’s <b>teams of ${fit}</b>. ` : ''}Add ${need - st.pool.size} more ${need - st.pool.size === 1 ? 'name' : 'names'} for teams of ${set.rosterSize}.</span></div>`}
+      ${(isC || (mem && set.openPool)) ? html`<${PoolAdd} x=${x} />` : !mem && html`<p class="small muted">Join to add names.</p>`}
+    </div>`}
 
-    <div class="sec">Scoring <span class="n">${st.cats.length}</span></div>
+    <div class="sec">What’s worth points <span class="n">${st.cats.length}</span></div>
     ${isC ? html`<${CatsEditor} x=${x} />` : html`<${CatsView} x=${x} />`}
 
     <div class="sec">Rules</div>
@@ -268,12 +283,14 @@ function Settings({ x }) {
   const set = (patch) => run('settings', { settings: patch });
   const [pun, setPun] = useState(s.punishment);
   const [note, setNote] = useState(s.draftNote);
+  const solo = x.solo;
   const odd = s.format === 'h2h' && st.members.length > 1 && st.members.length % 2 === 1;
   const row = (label, hint, ctl) => html`<div class="setrow"><div class="lbl"><b>${label}</b><span>${hint}</span></div>${ctl}</div>`;
   if (!isC) {
     return html`<div class="card"><div class="chips">
-      <span class="chip">${s.format === 'h2h' ? '⚔️ Head-to-head' : '🏁 Points race'}</span><span class="chip">🧢 ${s.rosterSize} per team</span>
-      <span class="chip">▶️ ${s.starters} start</span><span class="chip">🗓️ ${plural(s.numRounds, p)}</span>
+      <span class="chip">${solo ? '🙋 You score for yourselves' : '📋 Drafted teams'}</span>
+      <span class="chip">${s.format === 'h2h' ? '⚔️ Head-to-head' : '🏁 Points race'}</span>${!solo && html`<span class="chip">🧢 ${s.rosterSize} per team</span>
+      <span class="chip">▶️ ${s.starters} start</span>`}<span class="chip">🗓️ ${plural(s.numRounds, p)}</span>
       <span class="chip">✍️ ${s.whoScores === 'all' ? 'Anyone logs points' : 'Commish logs points'}</span>
       ${s.pickSecs > 0 && html`<span class="chip">⏱️ ${fmtSecs(s.pickSecs)} per pick</span>`}
       ${s.punishment && html`<span class="chip">💀 Last place: ${s.punishment}</span>`}</div></div>`;
@@ -281,19 +298,19 @@ function Settings({ x }) {
   return html`<div class="card"><h3>League rules</h3>
     ${row('Format', odd ? `Odd number of managers: one sits out each ${p}. Points race avoids that.` : s.format === 'h2h' ? `Face a different manager every ${p}. Best record wins.` : 'No matchups — most total points wins.',
     html`<${Seg} value=${s.format} disabled=${!pre} options=${[['h2h', 'Head-to-head'], ['points', 'Points race']]} onChange=${(v) => set({ format: v })} />`)}
-    ${pre && row('Who gets drafted', s.selfDraft ? 'Each other: every manager is on the board.' : 'Only the names on your list.',
-    html`<${Seg} value=${s.selfDraft ? 'y' : 'n'} options=${[['y', 'Each other'], ['n', 'A list']]} onChange=${(v) => set({ selfDraft: v === 'y' })} />`)}
-    ${row(pre ? 'Team size (max)' : 'Team size', pre ? 'Players per team. Shrinks to fit if there aren’t enough names.' : 'Players per team.', html`<${Step} value=${s.rosterSize} min=${1} max=${15} disabled=${!pre} onChange=${(v) => set({ rosterSize: v })} />`)}
-    ${row('Starters', s.starters < s.rosterSize ? `Only starters score. ${s.rosterSize - s.starters} on the bench.` : 'Everyone starts — no bench.', html`<${Step} value=${s.starters} min=${1} max=${s.rosterSize} disabled=${!pre} onChange=${(v) => set({ starters: v })} />`)}
+    ${pre && row('Who scores', solo ? 'You do: everyone scores for what they do. No draft.' : 'People you draft: each of you drafts a team from a list.',
+    html`<${Seg} value=${solo ? 'solo' : 'draft'} options=${[['solo', 'We do'], ['draft', 'People we draft']]} onChange=${(v) => set({ mode: v })} />`)}
+    ${!solo && row(pre ? 'Team size (max)' : 'Team size', pre ? 'Names per team. Shrinks to fit if the list is short.' : 'Names per team.', html`<${Step} value=${s.rosterSize} min=${1} max=${15} disabled=${!pre} onChange=${(v) => set({ rosterSize: v })} />`)}
+    ${!solo && row('Starters', s.starters < s.rosterSize ? `Only starters score. ${s.rosterSize - s.starters} on the bench.` : 'Everyone starts — no bench.', html`<${Step} value=${s.starters} min=${1} max=${s.rosterSize} disabled=${!pre} onChange=${(v) => set({ starters: v })} />`)}
     ${row('Scoring period', `What one stretch of the season is called. You start and end each ${p} by hand, so it can be any length.`,
     html`<select class="in" style="width:auto" aria-label="Scoring period" value=${P} onChange=${(e) => set({ period: e.target.value })}>${PERIODS.map((v) => html`<option value=${v}>${v}</option>`)}</select>`)}
     ${row('Season length', `How many ${p}s you play.`, html`<${Step} value=${s.numRounds} min=${Math.max(1, st.round)} max=${52} disabled=${st.phase === 'done'} onChange=${(v) => set({ numRounds: v })} />`)}
-    ${row('Who logs points', s.whoScores === 'all' ? 'Any manager. You can strike bad calls.' : 'Only you.', html`<${Seg} value=${s.whoScores} options=${[['all', 'Everyone'], ['commish', 'Just me']]} onChange=${(v) => set({ whoScores: v })} />`)}
-    ${pre && row('Pool additions', s.openPool ? 'Any manager can add players before the draft.' : 'Only you can add players.', html`<${Seg} value=${s.openPool ? 'y' : 'n'} options=${[['y', 'Everyone'], ['n', 'Just me']]} onChange=${(v) => set({ openPool: v === 'y' })} />`)}
-    ${st.phase !== 'season' && st.phase !== 'done' && row('Pick timer', s.pickSecs ? 'Time’s up → best available is auto-picked.' : 'No clock. Draft live or over a few days.',
+    ${row('Who logs points', s.whoScores === 'all' ? 'Anyone in the league. You can strike bad calls.' : 'Only you.', html`<${Seg} value=${s.whoScores} options=${[['all', 'Everyone'], ['commish', 'Just me']]} onChange=${(v) => set({ whoScores: v })} />`)}
+    ${pre && !solo && row('List additions', s.openPool ? 'Anyone in the league can add names before the draft.' : 'Only you can add names.', html`<${Seg} value=${s.openPool ? 'y' : 'n'} options=${[['y', 'Everyone'], ['n', 'Just me']]} onChange=${(v) => set({ openPool: v === 'y' })} />`)}
+    ${!solo && st.phase !== 'season' && st.phase !== 'done' && row('Pick timer', s.pickSecs ? 'Time’s up → best available is auto-picked.' : 'No clock. Draft live or over a few days.',
     html`<select class="in" style="width:auto" aria-label="Pick timer" value=${s.pickSecs} onChange=${(e) => set({ pickSecs: +e.target.value })}>
       ${[[0, 'Off'], [30, '30 sec'], [60, '1 min'], [120, '2 min'], [3600, '1 hour'], [28800, '8 hours']].map(([v, l]) => html`<option value=${v}>${l}</option>`)}</select>`)}
-    ${pre && html`<div class="setrow" style="display:block"><div class="lbl"><b>Draft time</b><span>Tell everyone when to show up. Optional.</span></div>
+    ${pre && !solo && html`<div class="setrow" style="display:block"><div class="lbl"><b>Draft time</b><span>Tell everyone when to show up. Optional.</span></div>
       <form class="row" style="margin-top:6px" onSubmit=${(e) => { e.preventDefault(); set({ draftNote: note }); toast('Saved'); }}>
         <input class="in grow" maxlength="80" placeholder="Thursday 8pm, my place" aria-label="Draft time" value=${note} onInput=${(e) => setNote(e.target.value)} />
         ${note !== s.draftNote && html`<button class="btn dark">Save</button>`}</form></div>`}
@@ -428,7 +445,7 @@ function Play({ x, s }) {
   return html`<div class="it ${s.void ? 'void' : ''}"><div class="ic"><${Ini} e=${e} size="sm" /></div>
     <div class="grow tx"><b>${e ? e.name : '???'}</b> — ${s.label}${s.qty > 1 ? ` ×${s.qty}` : ''}
       ${s.note && html`<div class="small muted">“${s.note}”</div>`}
-      <div class="when">${own ? `counts for ${name(own[0])}` : 'not in a starting lineup'} · logged by ${name(s.by)} · ${ago(s.at)}</div></div>
+      <div class="when">${x.solo ? '' : (own ? `counts for ${name(own[0])}` : 'not in a starting lineup') + ' · '}logged by ${name(s.by)} · ${ago(s.at)}</div></div>
     <${Pts} v=${s.pts} />
     ${!s.void && (isC || s.by === me) && st.phase !== 'done' && html`<button class="x" aria-label="Strike this play" title="Strike" onClick=${async () => (await ask('Strike this play?', `${e ? e.name : ''}: ${s.label} (${sgn(s.pts)}) is removed from the record.`, 'Strike it')) && run('stat.void', { id: s.id })}>✕</button>`}
   </div>`;
@@ -444,11 +461,12 @@ function Matchup({ x, a, b, r, pre }) {
     <div class="grow"><div class="t ell">${team(pk)}</div><div class="tiny muted">${name(pk)}${pk === me ? ' · you' : ''}${fin && s > o ? ' · W' : ''}</div></div><div class="score">${pre ? '–' : num(s)}</div></div>`;
   const det = (pk) => html`<div class="stack-s">${((st.locked[r] || {})[pk] || []).map((id) => html`<div><span class="ell">${(st.pool.get(id) || {}).name || '—'}</span><${Pts} v=${(sc.ent[id] && sc.ent[id].r[r]) || 0} plain /></div>`)}</div>`;
   if (!b) return html`<div class="card mu"><div class="side"><${Av} pk=${a} /><div class="grow"><div class="t ell">${team(a)}</div><div class="tiny muted">${name(a)}${a === me ? ' · you' : ''} · no opponent this ${p}</div></div><div class="score">${pre ? '–' : num(sa)}</div></div></div>`;
-  return html`<div class="card mu ${isMine ? 'mine' : ''}" onClick=${() => !pre && setOpen(!open)} style=${pre ? '' : 'cursor:pointer'}>
+  const tap = !pre && !x.solo;
+  return html`<div class="card mu ${isMine ? 'mine' : ''}" onClick=${() => tap && setOpen(!open)} style=${tap ? 'cursor:pointer' : ''}>
     ${isMine && html`<div class="tag">Your matchup</div>`}
     ${side(a, sa, sb)}<div class="vs"><span>VS</span></div>${side(b, sb, sa)}
-    ${open && html`<div class="det">${det(a)}${det(b)}</div>`}
-    ${!pre && !open && html`<div class="more">Tap for lineups</div>`}</div>`;
+    ${tap && open && html`<div class="det">${det(a)}${det(b)}</div>`}
+    ${tap && !open && html`<div class="more">Tap for lineups</div>`}</div>`;
 }
 
 // ---------------------------------------------------------------- team
@@ -544,16 +562,16 @@ function EntitySheet({ x, eid, onClose }) {
   const hist = st.stats.filter((s) => s.eid === eid).slice().reverse();
   return html`<${Sheet} title=${e.name} onClose=${onClose}><div class="stack">
     <div class="row"><${Ini} e=${e} /><div class="grow"><div class="small muted">${e.note}</div>
-      <div>${owner ? html`On <b>${team(owner)}</b> (${name(owner)})` : html`<span class="pill grn">Free agent</span>`}</div></div>
+      <div>${x.solo ? '' : owner ? html`On <b>${team(owner)}</b> (${name(owner)})` : html`<span class="pill grn">Free agent</span>`}</div></div>
       <div style="text-align:right"><div class="mono" style="font-size:26px;line-height:1">${num(p.total)}</div><div class="tiny muted">points</div></div></div>
     ${dropping ? html`<div><p class="small" style="margin-bottom:8px"><b>Your roster is full.</b> Who gets dropped for ${e.name}?</p>
         <div class="list">${my.map((id) => html`<div class="li tap" onClick=${() => add(id)}><${Ini} e=${st.pool.get(id)} /><div class="grow t">${st.pool.get(id).name}</div><span class="btn sm">Drop</span></div>`)}</div></div>`
     : html`<div class="row wrapx">
         ${canScore && html`<button class="btn pri" onClick=${() => open({ k: 'log', eid })}>＋ Log points</button>`}
-        ${season && me && !owner && html`<button class="btn yel" onClick=${() => (full ? setDropping(true) : add(null))}>Add to my team</button>`}
-        ${season && me && owner && owner !== me && html`<button class="btn" onClick=${() => open({ k: 'trade', to: owner, want: eid })}>🤝 Trade for</button>`}
-        ${season && owner === me && html`<button class="btn" onClick=${async () => { if (await ask(`Drop ${e.name}?`, 'They become a free agent anyone can grab.', 'Drop')) { const r = await run('adddrop', { drop: eid }); if (r.ok) onClose(); } }}>Drop</button>`}
-        ${isC && season && owner && owner !== me && html`<button class="btn" onClick=${async () => { if (await ask(`Drop ${e.name} from ${team(owner)}?`, 'Commissioner move. They become a free agent.', 'Drop')) { const r = await run('adddrop', { drop: eid, pk: owner }); if (r.ok) onClose(); } }}>Force drop</button>`}
+        ${season && !x.solo && me && !owner && html`<button class="btn yel" onClick=${() => (full ? setDropping(true) : add(null))}>Add to my team</button>`}
+        ${season && !x.solo && me && owner && owner !== me && html`<button class="btn" onClick=${() => open({ k: 'trade', to: owner, want: eid })}>🤝 Trade for</button>`}
+        ${season && !x.solo && owner === me && html`<button class="btn" onClick=${async () => { if (await ask(`Drop ${e.name}?`, 'They become a free agent anyone can grab.', 'Drop')) { const r = await run('adddrop', { drop: eid }); if (r.ok) onClose(); } }}>Drop</button>`}
+        ${isC && !x.solo && season && owner && owner !== me && html`<button class="btn" onClick=${async () => { if (await ask(`Drop ${e.name} from ${team(owner)}?`, 'Commissioner move. They become a free agent.', 'Drop')) { const r = await run('adddrop', { drop: eid, pk: owner }); if (r.ok) onClose(); } }}>Force drop</button>`}
       </div>`}
     ${st.round > 0 && html`<div><div class="h3" style="margin-bottom:6px">By ${x.p}</div><div class="chips">${Array.from({ length: st.round }, (_, i) => html`<span class="chip">${x.P} ${i + 1} <${Pts} v=${p.r[i + 1] || 0} /></span>`)}</div></div>`}
     <div><div class="h3" style="margin-bottom:6px">Game log</div>
@@ -590,7 +608,7 @@ function LogSheet({ x, eid, onClose }) {
   return html`<${Sheet} title="Log points" onClose=${onClose}>
     ${!ent ? html`<div><input class="in" type="search" placeholder="Who did something?" aria-label="Search players" value=${q} onInput=${(v) => setQ(v.target.value)} style="margin-bottom:10px" />
       <div class="list">${list.map((p) => html`<div class="li tap" key=${p.id} onClick=${() => setE(p.id)}><${Ini} e=${p} /><div class="grow"><div class="t ell">${p.name}</div>
-        <div class="s">${st.owner[p.id] ? x.name(st.owner[p.id]) : 'Free agent'}</div></div></div>`)}${!list.length && html`<div class="empty">No one matches.</div>`}</div></div>`
+        ${!x.solo && html`<div class="s">${st.owner[p.id] ? x.name(st.owner[p.id]) : 'Free agent'}</div>`}</div></div>`)}${!list.length && html`<div class="empty">No one matches.</div>`}</div></div>`
     : html`<form class="stack" onSubmit=${submit}>
       <div class="row"><${Ini} e=${ent} /><b class="grow">${ent.name}</b><button type="button" class="btn sm" onClick=${() => setE(null)}>Change</button></div>
       <div><label class="f">What happened?</label><div class="chips">
@@ -631,18 +649,18 @@ function LeagueTab({ x }) {
   return html`<div>
     <div class="sec" style="margin-top:4px">Standings</div>
     <div class="card" style="padding:8px 10px"><table class="st"><thead><tr><th>#</th><th>Team</th>${h2h && html`<th>W-L${rows.some((r) => r.t) ? '-T' : ''}</th>`}<th>PF</th>${h2h && html`<th>PA</th>`}</tr></thead>
-      <tbody>${rows.map((r) => html`<tr class=${r.pk === me ? 'me' : ''} key=${r.pk}><td>${r.rank}</td><td><div class="ell" style="max-width:42vw">${team(r.pk)}</div><div class="tiny muted" style="font-weight:400">${name(r.pk)}</div></td>
+      <tbody>${rows.map((r) => html`<tr class=${r.pk === me ? 'me' : ''} key=${r.pk} style=${x.solo ? 'cursor:pointer' : ''} onClick=${() => x.solo && open({ k: 'ent', eid: selfId(r.pk) })}><td>${r.rank}</td><td><div class="ell" style="max-width:42vw">${team(r.pk)}</div><div class="tiny muted" style="font-weight:400">${name(r.pk)}</div></td>
         ${h2h && html`<td>${r.w}-${r.l}${rows.some((q) => q.t) ? '-' + r.t : ''}</td>`}<td>${num(r.pf)}</td>${h2h && html`<td>${num(r.pa)}</td>`}</tr>`)}</tbody></table></div>
     ${st.settings.punishment && html`<p class="small" style="margin-top:8px">💀 Last place: <b>${st.settings.punishment}</b></p>`}
 
-    <div class="sec">Trades ${trades.filter((t) => t.status === 'open').length > 0 && html`<span class="n">${trades.filter((t) => t.status === 'open').length} open</span>`}</div>
+    ${!x.solo && html`    <div class="sec">Trades ${trades.filter((t) => t.status === 'open').length > 0 && html`<span class="n">${trades.filter((t) => t.status === 'open').length} open</span>`}</div>
     <div class="list">${trades.map((t) => html`<div class="li" key=${t.id} style="flex-wrap:wrap"><div class="grow" style="min-width:200px">
         <div class="t" style="font-weight:600"><b>${name(t.from)}</b> gives ${en(t.give)} <span class="muted">for</span> <b>${name(t.to)}</b>’s ${en(t.get)}</div>
         <div class="s">${{ open: 'Waiting on ' + name(t.to), done: 'Accepted ✓', declined: 'Declined', cancelled: 'Withdrawn', void: 'Voided — rosters changed' }[t.status]} · ${ago(t.at)}</div></div>
       ${t.status === 'open' && t.to === me && html`<button class="btn sm pri" onClick=${() => run('trade.accept', { id: t.id }, 'Trade accepted')}>Accept</button><button class="btn sm" onClick=${() => run('trade.decline', { id: t.id })}>Decline</button>`}
       ${t.status === 'open' && t.from === me && html`<button class="btn sm" onClick=${() => run('trade.decline', { id: t.id }, 'Offer withdrawn')}>Withdraw</button>`}
     </div>`)}${!trades.length && html`<div class="empty">No trades yet. Somebody make an offer.</div>`}</div>
-    ${me && st.phase === 'season' && html`<button class="btn" style="margin-top:10px" onClick=${() => setPick(true)}>🤝 Propose a trade</button>`}
+    ${me && st.phase === 'season' && html`<button class="btn" style="margin-top:10px" onClick=${() => setPick(true)}>🤝 Propose a trade</button>`}`}
 
     ${h2h && html`<div class="sec">Schedule</div>
       <div class="card stack-s">${Array.from({ length: st.settings.numRounds }, (_, i) => i + 1).map((r) => html`<div key=${r}>
@@ -650,11 +668,12 @@ function LeagueTab({ x }) {
         ${matchups(st.draft.order, r).map(([a, b]) => html`<div class="row small" style="gap:6px"><span class="ell ${a === me ? '' : ''}" style=${a === me ? 'font-weight:700' : ''}>${name(a)}</span>
           ${b ? html`${r <= st.round && html`<span class="mono">${num(sc.team[a].r[r])}–${num(sc.team[b].r[r])}</span>`}${r > st.round && html`<span class="muted">vs</span>`}<span class="ell" style=${b === me ? 'font-weight:700' : ''}>${name(b)}</span>` : html`<span class="muted">bye</span>`}</div>`)}</div>`)}</div>`}
 
-    <div class="sec">Scoring</div><${CatsView} x=${x} />
+    ${x.solo && html`<p class="small muted" style="margin-top:8px">Tap a name to see everything they’ve been scored for.</p>`}
+    <div class="sec">What’s worth points</div><${CatsView} x=${x} />
     <div class="sec">Rules</div><${Settings} x=${{ ...x, isC: false }} />
     ${isC && html`<button class="btn dark" style="margin-top:12px" onClick=${() => open({ k: 'rules' })}>⚙️ Commissioner tools</button>`}
     <div class="sec">Invite link</div><${LinkBox} code=${code} />
-    <p class="small muted" style="margin-top:8px">Anyone with the link can watch. Only managers can play.</p>
+    <p class="small muted" style="margin-top:8px">Anyone with the link can watch. Only people who joined before the start can play.</p>
     ${pick && html`<${Sheet} title="Trade with…" onClose=${() => setPick(false)}><div class="list">${st.draft.order.filter((k) => k !== me).map((k) => html`<div class="li tap" onClick=${() => { setPick(false); open({ k: 'trade', to: k }); }}>
       <${Av} pk=${k} /><div class="grow"><div class="t">${team(k)}</div><div class="s">${name(k)}</div></div></div>`)}</div><//>`}
   </div>`;

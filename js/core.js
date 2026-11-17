@@ -5,7 +5,7 @@
 export const LIMITS = { members: 20, pool: 600, cats: 40 };
 export const DEFAULT_SETTINGS = {
   rosterSize: 4, starters: 3, format: 'h2h', numRounds: 4,
-  whoScores: 'all', openPool: true, pickSecs: 0, punishment: '', period: 'Week', draftNote: '', selfDraft: false,
+  whoScores: 'all', openPool: true, pickSecs: 0, punishment: '', period: 'Week', draftNote: '', selfDraft: false, mode: 'draft',
 };
 export const PERIODS = ['Week', 'Episode', 'Round', 'Day'];
 
@@ -31,6 +31,8 @@ function cleanSettings(p, base) {
   if (PERIODS.includes(p.period)) s.period = p.period;
   if ('draftNote' in p) s.draftNote = str(p.draftNote, 80);
   if ('selfDraft' in p) s.selfDraft = !!p.selfDraft;
+  // 'solo': everyone plays as themselves, no draft. 'draft': managers draft rosters from a list.
+  if (p.mode === 'solo' || p.mode === 'draft') s.mode = p.mode;
   s.starters = Math.min(s.starters, s.rosterSize);
   return s;
 }
@@ -57,9 +59,10 @@ function addPool(st, items) {
 }
 
 // "Draft each other" leagues: every manager is also a draftable player.
-const selfId = (pk) => '@' + pk.slice(0, 14);
+export const selfId = (pk) => '@' + pk.slice(0, 14);
+export const isSolo = (st) => st.settings.mode === 'solo';
 function syncSelf(st) {
-  const want = new Map(st.settings.selfDraft ? st.members.map((m) => [selfId(m.pk), m]) : []);
+  const want = new Map(st.settings.selfDraft || isSolo(st) ? st.members.map((m) => [selfId(m.pk), m]) : []);
   for (const e of [...st.pool.values()]) if (e.self && !want.has(e.id)) st.pool.delete(e.id);
   const names = new Set([...st.pool.values()].filter((e) => !e.self).map((e) => normName(e.name)));
   for (const [id, m] of want) {
@@ -128,7 +131,7 @@ const H = {
     const next = cleanSettings(p.settings, st.settings);
     if (st.phase !== 'setup') {
       next.rosterSize = st.settings.rosterSize; next.starters = st.settings.starters; next.format = st.settings.format;
-      next.selfDraft = st.settings.selfDraft;
+      next.selfDraft = st.settings.selfDraft; next.mode = st.settings.mode;
       next.numRounds = Math.max(next.numRounds, st.round, 1);
       if (st.phase === 'done') next.numRounds = st.settings.numRounds;
     }
@@ -148,6 +151,7 @@ const H = {
     if (!m) return 'Join the league first';
     if (ev.pk !== st.commish && !(st.settings.openPool && st.phase === 'setup')) return 'Only the commissioner can add to the pool';
     if (st.phase === 'done') return 'Season is over';
+    if (isSolo(st)) return 'In this league the players are the people in it';
     const n = addPool(st, p.items);
     if (!n) return 'Nothing new to add (duplicates?)';
     if (st.phase !== 'setup') say(st, ev, '🆕', `${m.name} added ${n === 1 ? ename(st, p.items[0].id) : n + ' new names'} to the player pool`);
@@ -219,6 +223,16 @@ const H = {
     const order = Array.isArray(p.order) ? p.order : [];
     const pks = st.members.map((m) => m.pk);
     if (order.length !== pks.length || new Set(order).size !== order.length || !order.every((k) => pks.includes(k))) return 'Managers changed — try again';
+    if (isSolo(st)) {
+      // No draft: each person is their own one-player team and Week 1 starts right away.
+      for (const e of [...st.pool.values()]) if (!e.self) st.pool.delete(e.id);
+      syncSelf(st);
+      st.settings.rosterSize = 1; st.settings.starters = 1;
+      st.phase = 'season'; st.draft = { order, picks: [], at: ev.at }; st.round = 1; st.locked[1] = {};
+      for (const k of order) { const id = selfId(k); st.rosters[k] = [id]; st.owner[id] = k; st.lineups[k] = [id]; st.locked[1][k] = [id]; }
+      say(st, ev, '📣', `The season is on — ${st.settings.period} 1 is live`);
+      return;
+    }
     const fit = fitRoster(st);
     if (fit < 1) return `Need at least ${pks.length} names to draft — one per manager`;
     st.settings.rosterSize = fit; st.settings.starters = Math.min(st.settings.starters, fit);
@@ -256,7 +270,7 @@ const H = {
     say(st, ev, '↩️', `Commish undid the pick of ${ename(st, pk.eid)}`);
   },
   lineup(st, ev, p) {
-    if (st.phase !== 'season') return 'Lineups are closed';
+    if (st.phase !== 'season' || isSolo(st)) return 'Lineups are closed';
     const pk = ev.pk === st.commish && p.pk ? p.pk : ev.pk;
     const roster = st.rosters[pk];
     if (!roster) return 'Not a manager';
@@ -279,7 +293,7 @@ const H = {
     say(st, ev, '📣', `${st.settings.period} ${p.n} is live — lineups are locked`);
   },
   adddrop(st, ev, p) {
-    if (st.phase !== 'season') return 'Rosters are locked';
+    if (st.phase !== 'season' || isSolo(st)) return 'Rosters are locked';
     const pk = ev.pk === st.commish && p.pk ? p.pk : ev.pk;
     const roster = st.rosters[pk];
     if (!roster) return 'Not a manager';
@@ -297,7 +311,7 @@ const H = {
     say(st, ev, '🔁', `${who(st, pk)} ${parts.join(', ')}`);
   },
   'trade.offer'(st, ev, p) {
-    if (st.phase !== 'season') return 'Trading is closed';
+    if (st.phase !== 'season' || isSolo(st)) return 'Trading is closed';
     const from = ev.pk, to = p.to;
     if (!st.rosters[from] || !st.rosters[to] || from === to) return 'Invalid trade partner';
     const give = Array.isArray(p.give) ? p.give : [], get = Array.isArray(p.get) ? p.get : [];

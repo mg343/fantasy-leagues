@@ -126,17 +126,25 @@ await until(() => E.parsed.size === A.parsed.size, 'full history from relay');
 assert.equal(E.state.phase, 'done');
 assert.deepEqual(standings(E.state).map((r) => r.pk), standings(A.state).map((r) => r.pk));
 assert.equal(E.state.rejected.size, A.state.rejected.size);
-// "draft each other": managers are the player pool, and team size fits the pool
-const S = await createLeague({ name: 'Roomies', me: 'Sam', pin: 'sam-pin', settings: { selfDraft: true, rosterSize: 4, starters: 3 }, cats, pool: [] }, { relays });
-assert.deepEqual([...S.state.pool.values()].map((e) => e.name), ['Sam']);
+// "you're the players" league: no draft, everyone scores for themselves
+const S = await createLeague({ name: 'Roomies', me: 'Sam', pin: 'sam-pin', settings: { mode: 'solo', numRounds: 2 }, cats, pool: [{ id: 'zz', name: 'Stray' }] }, { relays });
 const R = await new League(S.code, { relays }).init(); await until(() => R.synced && R.state.exists, 'roomies sync');
 R.login('Rae', 'rae-pin'); await ok(R.act('join', { name: 'Rae' }));
-await until(() => S.state.pool.size === 2, 'joiner becomes draftable');
-await bad(S.act('pool-', { id: [...S.state.pool.keys()][1] }), /draftable/);
-await ok(S.act('pool+', { items: [{ id: 'dog', name: 'The Dog' }, { id: 'ta', name: 'The TA' }, { id: 'x', name: 'Landlord' }] }));
+await until(() => S.state.members.length === 2, 'rae joins');
+await bad(R.act('pool+', { items: [{ id: 'dog', name: 'The Dog' }] }), /players are the people/);
 await ok(S.act('draft.start', { order: [S.me.pk, R.me.pk] }));
-assert.equal(S.state.settings.rosterSize, 2); assert.equal(S.state.settings.starters, 2);   // 5 names / 2 managers
-await ok(S.act('settings', { settings: { selfDraft: false } })); assert.equal(S.state.pool.size, 5);  // locked after the draft starts
+assert.equal(S.state.phase, 'season'); assert.equal(S.state.round, 1);            // straight into Week 1
+assert.deepEqual([...S.state.pool.values()].map((e) => e.name), ['Sam', 'Rae']);   // only the people in it
+const samId = S.state.rosters[S.me.pk][0], raeId = S.state.rosters[R.me.pk][0];
+await until(() => R.state.round === 1, 'season start syncs');
+await ok(R.act('stat', { eid: raeId, cat: 'a' }));                                 // Rae logs her own +10
+await ok(R.act('stat', { eid: samId, cat: 'b' }));                                 // ...and Sam's -4
+await bad(R.act('adddrop', { drop: raeId }), /locked/);
+await bad(R.act('trade.offer', { to: S.me.pk, give: [raeId], get: [samId] }), /closed/);
+await until(() => S.state.stats.length === 2, 'solo stats sync');
+await ok(S.act('advance', { n: 2 })); await ok(S.act('advance', { n: 3 }));
+let ss = standings(S.state);
+assert.equal(ss[0].pk, R.me.pk); assert.equal(ss[0].w, 1); assert.equal(ss[0].pf, 10); assert.equal(ss[1].pf, -4);
 [S, R].forEach((l) => l.close());
 
 // pick timer: once the clock runs out, any manager's client may submit the top available player

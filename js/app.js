@@ -37,12 +37,11 @@ function Home() {
     <hr/>
     <div class="sec" style="margin-top:0">Fantasy 101 — how this works</div>
     <div class="card"><div class="how">
-      <div><p><b>Someone starts a league</b><span>They’re the commissioner. They decide who gets drafted — each other, or a list of other people — and what earns points.</span></p></div>
-      <div><p><b>Friends join with a link</b><span>Each friend is a manager with their own team. Type a name and a PIN — that’s the whole sign-up.</span></p></div>
-      <div><p><b>You draft</b><span>Managers take turns claiming people for their team (1→8, then 8→1). Once someone’s taken, they’re yours alone.</span></p></div>
-      <div><p><b>Set a lineup</b><span>Each week you choose starters. Only starters score — your bench is insurance. Lineups lock when the week starts.</span></p></div>
-      <div><p><b>Real life happens, points get logged</b><span>Your player aces the exam, lands the scoop, cries on camera? Anyone logs it, the commissioner can strike bad calls.</span></p></div>
-      <div><p><b>Win your matchup</b><span>Head-to-head every week, or one big points race. Work the free agents and trade your way to the title. Last place suffers the punishment.</span></p></div>
+      <div><p><b>Someone starts a league and sends the link</b><span>Friends open it, type a name and a PIN, and they’re in. No accounts.</span></p></div>
+      <div><p><b>Decide who scores</b><span><b>You do:</b> everyone scores for their own real life — chores, classes, dates. Or <b>people you draft:</b> take turns claiming senators, journalists, a TV cast, and score when they do things.</span></p></div>
+      <div><p><b>Something happens, someone logs it</b><span>Pick the person, pick what they did, done. Every league has its own list of what’s worth points. Bad calls can be struck.</span></p></div>
+      <div><p><b>Win the week</b><span>Each week you’re matched against one friend. Higher score takes the win. (Or skip matchups and just race for most points.)</span></p></div>
+      <div><p><b>Crown a champion</b><span>Best record after the last week wins. Last place does the punishment you all agreed on.</span></p></div>
     </div></div>
     <p class="small muted center" style="margin-top:26px">No accounts and no Anyleague server: each league is end-to-end encrypted with a key that lives only in its invite link. Anyone with the link can view and join, so share it like a group chat invite.</p>
   </div>`;
@@ -50,13 +49,15 @@ function Home() {
 
 function Create({ tid }) {
   const [tpl, setTplRaw] = useState(TEMPLATES.find((t) => t.id === tid) || TEMPLATES[0]);
-  const [self, setSelf] = useState(!!tpl.self);
+  const [solo, setSolo] = useState(!!tpl.solo);
   const [names, setNames] = useState('');
   const [name, setName] = useState('');
   const [me, setMe] = useState('');
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
-  const setTpl = (t) => { setTplRaw(t); setSelf(!!t.self); };
+  const setTpl = (t) => { setTplRaw(t); setSolo(!!t.solo); setNames(''); };
+  const c0 = tpl.cats[0], ex = `“${c0.name}” (${c0.pts > 0 ? '+' : ''}${c0.pts})`;
+  const count = parseNames(names).length;
   const submit = async (e) => {
     e.preventDefault();
     if (!me.trim()) return toast('Add your name', 'err');
@@ -65,8 +66,8 @@ function Create({ tid }) {
     try {
       const lg = await createLeague({
         name: name.trim() || tpl.suggest || 'Untitled League', emoji: tpl.emoji, me: me.trim(), pin, hint: tpl.poolHint,
-        cats: tpl.cats.map((c) => ({ id: rid(), ...c })), pool: parseNames(names),
-        settings: { period: tpl.period || 'Week', selfDraft: self },
+        cats: tpl.cats.map((c) => ({ id: rid(), ...c })), pool: solo ? [] : parseNames(names),
+        settings: { period: tpl.period || 'Week', mode: solo ? 'solo' : 'draft' },
       });
       const code = lg.code; lg.close(); go('l/' + code);
     } catch (err) { toast(String(err.message || err), 'err'); setBusy(false); }
@@ -77,17 +78,20 @@ function Create({ tid }) {
     <form class="stack" onSubmit=${submit}>
       <div><label class="f">1 · What’s it about?</label>
         <div class="chips">${TEMPLATES.map((t) => html`<button type="button" class="chip ${t === tpl ? 'on' : ''}" onClick=${() => setTpl(t)}>${t.emoji} ${t.title}</button>`)}</div>
-        <p class="small muted" style="margin-top:8px">${tpl.blurb} Comes with ${tpl.cats.length} ways to score, like “${tpl.cats[0].name}” (${tpl.cats[0].pts > 0 ? '+' : ''}${tpl.cats[0].pts}). You can change them.</p></div>
+        <p class="small muted" style="margin-top:8px">${tpl.blurb} Comes with ${tpl.cats.length} ways to score, like ${ex}. You can change them later.</p></div>
 
-      <div class="card flat"><label class="f">2 · Who gets drafted?</label>
-        <p class="small muted" style="margin-bottom:10px">In fantasy football you draft NFL players and score when they do well. Here, you and your friends are the <b>managers</b> — so who are your players?</p>
+      <div class="card flat"><label class="f">2 · Who scores the points?</label>
         <div class="stack-s">
-          <button type="button" class="opt ${self ? 'on' : ''}" onClick=${() => setSelf(true)}><b>🫵 Each other</b><span>Everyone who joins the league can be drafted. You’ll own a few of your friends and score when they do things. Best for roommates, classmates, the group chat.</span></button>
-          <button type="button" class="opt ${self ? '' : 'on'}" onClick=${() => setSelf(false)}><b>📋 Other people or things</b><span>You make the list: ${tpl.poolHint.replace(/…$/, '')}. Nobody on it needs to know they’re in a fantasy league.</span></button>
+          <button type="button" class="opt ${solo ? 'on' : ''}" onClick=${() => setSolo(true)}><b>🙋 We do</b><span>No draft. Everyone in the league scores for what they do in real life.</span></button>
+          <button type="button" class="opt ${solo ? '' : 'on'}" onClick=${() => setSolo(false)}><b>📋 People we draft</b><span>Like fantasy football. Each of you drafts a team from a list of other people, and scores when they do things.</span></button>
         </div>
-        <div style="margin-top:12px"><label class="f" for="pl" style="font-size:12px">${self ? 'Anyone else draftable? (optional)' : 'Who’s on the list? (you can add more later)'}</label>
-          <textarea id="pl" class="in" style="min-height:84px" placeholder=${self ? 'People who aren’t joining but should be draftable — one per line\nProf. Okafor\nThe landlord' : `One per line. ${tpl.poolHint}`} value=${names} onInput=${(e) => setNames(e.target.value)}></textarea>
-          <p class="tiny muted" style="margin-top:4px">${self ? 'More names means bigger teams.' : 'Aim for at least 3–4 names per manager. Friends can add names too once they join.'}</p></div>
+        <div class="eg"><b>With 4 friends:</b> ${solo
+    ? html`everyone joins with your link. Ben does ${ex} → anyone logs it → Ben’s score goes up. Each ${(tpl.period || 'week').toLowerCase()} Ben faces one friend; higher score wins.`
+    : html`you make a list of ~16 names and take turns drafting 4 each. Someone on your team does ${ex} → anyone logs it → your score goes up. Each ${(tpl.period || 'week').toLowerCase()} your team faces a friend’s team.`}</div>
+        ${!solo && html`<div style="margin-top:12px"><label class="f" for="pl" style="font-size:12px">Who can be drafted? ${count > 0 && html`<span class="muted">· ${count} so far</span>`}</label>
+          <textarea id="pl" class="in" style="min-height:96px" placeholder=${`One per line. ${tpl.poolHint}`} value=${names} onInput=${(e) => setNames(e.target.value)}></textarea>
+          <div class="row wrapx" style="margin-top:6px"><span class="tiny muted grow" style="min-width:160px">Aim for 3–4 names per person playing. You and your friends can add more later.</span>
+            ${tpl.starter && html`<button type="button" class="btn sm" onClick=${() => setNames(tpl.starter.join('\n'))}>Use a starter list (${tpl.starter.length})</button>`}</div></div>`}
       </div>
 
       <div><label class="f" for="ln">3 · League name</label>
@@ -98,7 +102,7 @@ function Create({ tid }) {
         <input id="pn" class="in" type="password" maxlength="32" placeholder=${`${PIN_MIN}+ characters`} autocomplete="new-password" value=${pin} onInput=${(e) => setPin(e.target.value)} /></div></div>
       <p class="small muted" style="margin-top:6px">You’ll need your name and PIN to sign in again. There’s no reset.</p>
       <button class="btn pri big" disabled=${busy}>${busy ? 'Creating…' : 'Create league →'}</button>
-      <p class="small muted center">You’ll be the commissioner. Next you’ll get a link to send your friends.</p>
+      <p class="small muted center">Next you’ll get a link to send your friends.</p>
     </form>
   </div>`;
 }
