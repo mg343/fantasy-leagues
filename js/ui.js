@@ -96,3 +96,10 @@ export async function copy(text) {
   try { await navigator.clipboard.writeText(text); toast('Link copied'); } catch (e) { prompt('Copy this link', text); }
 }
 export const leagueUrl = (code) => `${location.origin}${location.pathname}${location.search}#/l/${code}`;
+
+// "one per line" (or comma-separated) → pool items; optional note after a |
+export function parseNames(text) {
+  let lines = String(text || '').split('\n');
+  if (lines.length === 1 && text.includes(',')) lines = text.split(',');
+  return lines.map((l) => { const [n, ...rest] = l.split('|'); return { id: Math.random().toString(36).slice(2, 12), name: n.trim(), note: rest.join('|').trim() }; }).filter((i) => i.name);
+}

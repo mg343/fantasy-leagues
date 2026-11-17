@@ -1,6 +1,6 @@
-import { html, useState, useEffect, useRef, useNow, go, toast, ask, ago, assignEmoji, Av, Ini, Pts, num, sgn, plural, Sheet, Seg, Step, copy, leagueUrl } from './ui.js';
+import { html, useState, useEffect, useRef, useNow, go, toast, ask, parseNames, ago, assignEmoji, Av, Ini, Pts, num, sgn, plural, Sheet, Seg, Step, copy, leagueUrl } from './ui.js';
 import { League, rid, validPin, PIN_MIN } from './net.js';
-import { scores, standings, matchups, draftSlot, clockStart, available, roundDone, normName, PERIODS } from './core.js';
+import { scores, standings, matchups, draftSlot, clockStart, available, roundDone, normName, PERIODS, fitRoster } from './core.js';
 
 // ---------------------------------------------------------------- plumbing
 function useLeague(code) {
@@ -159,9 +159,10 @@ function LinkBox({ code }) {
 function Lobby({ x }) {
   const { st, isC, mem, run, me, code, open, name } = x;
   const need = st.members.length * st.settings.rosterSize;
+  const fit = fitRoster(st), self = st.settings.selfDraft;
   const checks = [
     [st.members.length >= 2, `${plural(st.members.length, 'manager')}`, 'at least 2 managers'],
-    [st.pool.size >= need && st.pool.size > 0, `${plural(st.pool.size, 'player')} in the pool (need ${need})`, `${need - st.pool.size} more ${need - st.pool.size === 1 ? 'player' : 'players'} in the pool`],
+    [fit >= 1, fit >= 1 ? `${plural(st.pool.size, 'name')} to draft → teams of ${fit}` : `${plural(st.pool.size, 'name')} to draft`, 'at least one name to draft per manager'],
     [st.cats.length > 0, `${plural(st.cats.length, 'scoring rule')}`, 'at least one scoring rule'],
   ];
   const problems = checks.filter((c) => !c[0]).map((c) => c[2]);
@@ -172,7 +173,7 @@ function Lobby({ x }) {
     return o;
   };
   const start = async () => {
-    if (!await ask('Start the draft?', `Joining closes. ${order ? `${name(order[0])} picks first.` : 'The draft order will be randomized.'} ${plural(st.members.length, 'manager')}, ${st.settings.rosterSize} picks each.`, 'Start draft')) return;
+    if (!await ask('Start the draft?', `Joining closes. ${order ? `${name(order[0])} picks first.` : 'The draft order will be randomized.'} ${plural(st.members.length, 'manager')}, ${fit} ${fit === 1 ? 'pick' : 'picks'} each.`, 'Start draft')) return;
     run('draft.start', { order: order || shuffle() });
   };
   const list = order ? order.map((pk) => st.members.find((m) => m.pk === pk)) : st.members;
@@ -202,12 +203,16 @@ function Lobby({ x }) {
       ${!isC && mem && html`<button class="btn sm ghost" onClick=${async () => (await ask('Leave this league?', 'You can rejoin before the draft.', 'Leave')) && run('leave')}>Leave league</button>`}
     </div>
 
-    <div class="sec">Player pool <span class="n">${st.pool.size}</span>${st.pool.size < need && html`<span class="tiny muted" style="text-transform:none;letter-spacing:0">need ${need}+</span>`}</div>
+    <div class="sec">Who gets drafted <span class="n">${st.pool.size}</span></div>
     <div class="card stack">
-      <p class="small muted">Who (or what) gets drafted. ${st.settings.openPool ? 'Any manager can add names.' : 'Only the commissioner can add names.'}</p>
-      ${st.pool.size > 0 && html`<div class="chips">${[...st.pool.values()].map((e) => html`<span class="chip" key=${e.id} title=${e.note}><${Ini} e=${e} size="sm" /><span class="ell">${e.name}</span>${e.note && html`<span class="tiny muted ell">${e.note}</span>`}
-        ${isC && html`<button class="x" aria-label=${'Remove ' + e.name} onClick=${() => run('pool-', { id: e.id })}>✕</button>`}</span>`)}</div>`}
-      ${(isC || (mem && st.settings.openPool)) ? html`<${PoolAdd} x=${x} />` : !mem && html`<p class="small muted">Join to add players.</p>`}
+      <p class="small">${self
+    ? html`<b>You draft each other.</b> Everyone who joins is automatically on the board. You can also add people who aren’t playing.`
+    : html`<b>You draft from this list</b>${st.hint ? ` — ${st.hint.replace(/…$/, '').toLowerCase()}` : ''}. Like NFL players in fantasy football: managers take turns claiming them, then score when they do things.`}
+        ${' '}<span class="muted">${st.settings.openPool ? 'Any manager can add names.' : 'Only the commissioner can add names.'}</span></p>
+      ${st.pool.size > 0 && html`<div class="chips">${[...st.pool.values()].map((e) => html`<span class="chip" key=${e.id} title=${e.note}><${Ini} e=${e} size="sm" /><span class="ell">${e.name}</span>${e.self ? html`<span class="tiny muted">manager</span>` : e.note && html`<span class="tiny muted ell">${e.note}</span>`}
+        ${isC && !e.self && html`<button class="x" aria-label=${'Remove ' + e.name} onClick=${() => run('pool-', { id: e.id })}>✕</button>`}</span>`)}</div>`}
+      ${fit >= 1 && fit < st.settings.rosterSize && st.members.length > 1 && html`<div class="banner">💡 <span>Right now that’s <b>teams of ${fit}</b>. Add ${need - st.pool.size} more ${need - st.pool.size === 1 ? 'name' : 'names'} for teams of ${st.settings.rosterSize}${self ? ' — or invite more friends' : ''}.</span></div>`}
+      ${(isC || (mem && st.settings.openPool)) ? html`<${PoolAdd} x=${x} />` : !mem && html`<p class="small muted">Join to add names.</p>`}
     </div>
 
     <div class="sec">Scoring <span class="n">${st.cats.length}</span></div>
@@ -221,17 +226,16 @@ function Lobby({ x }) {
 
 function PoolAdd({ x, onDone }) {
   const [text, setText] = useState('');
+  const hint = (x.st.hint || 'Whoever you’re drafting…');
   const add = async (e) => {
     e.preventDefault();
-    let lines = text.split('\n');
-    if (lines.length === 1 && text.includes(',')) lines = text.split(',');
-    const items = lines.map((l) => { const [n, ...rest] = l.split('|'); return { id: rid(), name: n.trim(), note: rest.join('|').trim() }; }).filter((i) => i.name);
+    const items = parseNames(text).map((i) => ({ ...i, id: rid() }));
     if (!items.length) return;
     const r = await x.run('pool+', { items });
-    if (r.ok) { setText(''); if (onDone) { toast('Added to the pool'); onDone(); } }
+    if (r.ok) { setText(''); if (onDone) { toast('Added'); onDone(); } }
   };
   return html`<form onSubmit=${add}>
-    <textarea class="in" aria-label="Add players" placeholder=${'Add players — one per line\nPriya\nMarcus | the roommate\nProf. Okafor | CS 229'} value=${text} onInput=${(e) => setText(e.target.value)}></textarea>
+    <textarea class="in" aria-label="Add names" placeholder=${`Add names — one per line\n${hint}`} value=${text} onInput=${(e) => setText(e.target.value)}></textarea>
     <div class="row" style="margin-top:8px"><span class="tiny muted grow">One per line (or comma-separated). Optional note after a |</span><button class="btn dark" disabled=${!text.trim()}>Add</button></div>
   </form>`;
 }
@@ -277,7 +281,9 @@ function Settings({ x }) {
   return html`<div class="card"><h3>League rules</h3>
     ${row('Format', odd ? `Odd number of managers: one sits out each ${p}. Points race avoids that.` : s.format === 'h2h' ? `Face a different manager every ${p}. Best record wins.` : 'No matchups — most total points wins.',
     html`<${Seg} value=${s.format} disabled=${!pre} options=${[['h2h', 'Head-to-head'], ['points', 'Points race']]} onChange=${(v) => set({ format: v })} />`)}
-    ${row('Roster size', 'Players per team. Also the number of draft rounds.', html`<${Step} value=${s.rosterSize} min=${1} max=${15} disabled=${!pre} onChange=${(v) => set({ rosterSize: v })} />`)}
+    ${pre && row('Who gets drafted', s.selfDraft ? 'Each other: every manager is on the board.' : 'Only the names on your list.',
+    html`<${Seg} value=${s.selfDraft ? 'y' : 'n'} options=${[['y', 'Each other'], ['n', 'A list']]} onChange=${(v) => set({ selfDraft: v === 'y' })} />`)}
+    ${row(pre ? 'Team size (max)' : 'Team size', pre ? 'Players per team. Shrinks to fit if there aren’t enough names.' : 'Players per team.', html`<${Step} value=${s.rosterSize} min=${1} max=${15} disabled=${!pre} onChange=${(v) => set({ rosterSize: v })} />`)}
     ${row('Starters', s.starters < s.rosterSize ? `Only starters score. ${s.rosterSize - s.starters} on the bench.` : 'Everyone starts — no bench.', html`<${Step} value=${s.starters} min=${1} max=${s.rosterSize} disabled=${!pre} onChange=${(v) => set({ starters: v })} />`)}
     ${row('Scoring period', `What one stretch of the season is called. You start and end each ${p} by hand, so it can be any length.`,
     html`<select class="in" style="width:auto" aria-label="Scoring period" value=${P} onChange=${(e) => set({ period: e.target.value })}>${PERIODS.map((v) => html`<option value=${v}>${v}</option>`)}</select>`)}

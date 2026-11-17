@@ -214,3 +214,8 @@ hr { border: 0; border-top: 1.5px dashed var(--ink); margin: 26px 0; opacity: .3
 .log .play { display: flex; gap: 10px; align-items: flex-start; background: var(--card); border: 1.5px solid var(--ink); border-radius: 12px; padding: 8px 12px; font-size: 14px; }
 .log .play.void .tx { text-decoration: line-through; opacity: .5; }
 .log .chatbar { position: sticky; bottom: calc(74px + env(safe-area-inset-bottom)); background: var(--paper); padding: 8px 0; margin-top: 4px; z-index: 5; }
+
+/* choice cards */
+.opt { display: block; width: 100%; text-align: left; background: #fff; border: 2px solid var(--ink); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+.opt b { display: block; font-size: 16px; } .opt span { display: block; font-size: 13.5px; color: var(--muted); line-height: 1.35; margin-top: 2px; }
+.opt.on { background: var(--yellow); box-shadow: 2px 2px 0 var(--ink); } .opt.on span { color: var(--ink); }

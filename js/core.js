@@ -5,7 +5,7 @@
 export const LIMITS = { members: 20, pool: 600, cats: 40 };
 export const DEFAULT_SETTINGS = {
   rosterSize: 4, starters: 3, format: 'h2h', numRounds: 4,
-  whoScores: 'all', openPool: true, pickSecs: 0, punishment: '', period: 'Week', draftNote: '',
+  whoScores: 'all', openPool: true, pickSecs: 0, punishment: '', period: 'Week', draftNote: '', selfDraft: false,
 };
 export const PERIODS = ['Week', 'Episode', 'Round', 'Day'];
 
@@ -30,6 +30,7 @@ function cleanSettings(p, base) {
   if ('punishment' in p) s.punishment = str(p.punishment, 200);
   if (PERIODS.includes(p.period)) s.period = p.period;
   if ('draftNote' in p) s.draftNote = str(p.draftNote, 80);
+  if ('selfDraft' in p) s.selfDraft = !!p.selfDraft;
   s.starters = Math.min(s.starters, s.rosterSize);
   return s;
 }
@@ -54,6 +55,20 @@ function addPool(st, items) {
   }
   return n;
 }
+
+// "Draft each other" leagues: every manager is also a draftable player.
+const selfId = (pk) => '@' + pk.slice(0, 14);
+function syncSelf(st) {
+  const want = new Map(st.settings.selfDraft ? st.members.map((m) => [selfId(m.pk), m]) : []);
+  for (const e of [...st.pool.values()]) if (e.self && !want.has(e.id)) st.pool.delete(e.id);
+  const names = new Set([...st.pool.values()].filter((e) => !e.self).map((e) => normName(e.name)));
+  for (const [id, m] of want) {
+    if (st.pool.has(id)) st.pool.get(id).name = m.name;
+    else if (!names.has(normName(m.name)) && st.pool.size < LIMITS.pool) st.pool.set(id, { id, name: m.name, note: '', self: m.pk });
+  }
+}
+// Teams are as big as the pool allows, up to the roster size the commissioner asked for.
+export const fitRoster = (st) => Math.min(st.settings.rosterSize, Math.floor(st.pool.size / Math.max(1, st.members.length)));
 
 function fresh() {
   return {
@@ -103,7 +118,9 @@ const H = {
     st.settings = cleanSettings(p.settings, DEFAULT_SETTINGS);
     st.cats = cleanCats(p.cats); addPool(st, p.pool);
     const name = str(p.me, 24) || 'Commish';
+    st.hint = str(p.hint, 120);
     st.members.push({ pk: ev.pk, name, team: str(p.team, 32) || `Team ${name}` });
+    syncSelf(st);
     say(st, ev, '🎉', `${name} founded the league`);
   },
   settings(st, ev, p) {
@@ -111,10 +128,12 @@ const H = {
     const next = cleanSettings(p.settings, st.settings);
     if (st.phase !== 'setup') {
       next.rosterSize = st.settings.rosterSize; next.starters = st.settings.starters; next.format = st.settings.format;
+      next.selfDraft = st.settings.selfDraft;
       next.numRounds = Math.max(next.numRounds, st.round, 1);
       if (st.phase === 'done') next.numRounds = st.settings.numRounds;
     }
     st.settings = next;
+    if (st.phase === 'setup') syncSelf(st);
     if (typeof p.name === 'string' && str(p.name, 60)) st.name = str(p.name, 60);
     if (typeof p.desc === 'string') st.desc = str(p.desc, 300);
     if (typeof p.emoji === 'string' && str(p.emoji, 8)) st.emoji = str(p.emoji, 8);
@@ -137,6 +156,7 @@ const H = {
     const e = st.pool.get(p.id);
     if (!e) return 'Not in the pool';
     if (ev.pk !== st.commish) return 'Only the commissioner can remove players';
+    if (e.self) return 'Managers are draftable in this league';
     if (st.owner[e.id]) return 'Already on a roster';
     st.pool.delete(e.id);
   },
@@ -156,6 +176,7 @@ const H = {
     if (st.members.length >= LIMITS.members) return 'League is full';
     st.members.push({ pk: ev.pk, name, team: str(p.team, 32) || `Team ${name}` });
     if (st.preorder) st.preorder.push(ev.pk);
+    syncSelf(st);
     say(st, ev, '👋', `${name} joined the league`);
   },
   leave(st, ev) {
@@ -165,6 +186,7 @@ const H = {
     say(st, ev, '🚪', `${who(st, ev.pk)} left the league`);
     st.members = st.members.filter((m) => m.pk !== ev.pk);
     if (st.preorder) st.preorder = st.preorder.filter((k) => k !== ev.pk);
+    syncSelf(st);
   },
   kick(st, ev, p) {
     if (ev.pk !== st.commish) return 'Only the commissioner can remove managers';
@@ -173,6 +195,7 @@ const H = {
     say(st, ev, '🥾', `${who(st, p.pk)} was removed`);
     st.members = st.members.filter((m) => m.pk !== p.pk);
     if (st.preorder) st.preorder = st.preorder.filter((k) => k !== p.pk);
+    syncSelf(st);
   },
   profile(st, ev, p) {
     const m = member(st, ev.pk);
@@ -196,7 +219,9 @@ const H = {
     const order = Array.isArray(p.order) ? p.order : [];
     const pks = st.members.map((m) => m.pk);
     if (order.length !== pks.length || new Set(order).size !== order.length || !order.every((k) => pks.includes(k))) return 'Managers changed — try again';
-    if (st.pool.size < pks.length * st.settings.rosterSize) return `Need at least ${pks.length * st.settings.rosterSize} players in the pool`;
+    const fit = fitRoster(st);
+    if (fit < 1) return `Need at least ${pks.length} names to draft — one per manager`;
+    st.settings.rosterSize = fit; st.settings.starters = Math.min(st.settings.starters, fit);
     st.phase = 'draft'; st.draft = { order, picks: [], at: ev.at };
     for (const k of pks) st.rosters[k] = [];
     say(st, ev, '🚨', `The draft is live! ${who(st, order[0])} is on the clock`);

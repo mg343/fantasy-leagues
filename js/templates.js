@@ -3,7 +3,7 @@ const c = (name, pts) => ({ name, pts });
 
 export const TEMPLATES = [
   {
-    id: 'semester', emoji: '🎓', title: 'Semester League', blurb: 'Draft your friends. Score their academic chaos.',
+    self: true, id: 'semester', emoji: '🎓', title: 'Semester League', blurb: 'Draft your friends. Score their academic chaos.',
     suggest: 'Finals Week Fantasy', poolHint: 'Your friends, classmates, that one TA…',
     cats: [c('Aces an exam (A or better)', 10), c('Pulls an all-nighter', 4), c('Goes to office hours', 3), c('Professor knows their name', 2),
       c('Skips class', -3), c('Falls asleep in lecture', -2), c('Late submission', -4), c('Drops a class', -10)],
@@ -34,7 +34,7 @@ export const TEMPLATES = [
       c('Posts something unhinged', -3), c('Gets sued', -6), c('Layoffs', -8), c('“Excited to announce”', 1)],
   },
   {
-    id: 'house', emoji: '🏠', title: 'House League', blurb: 'Roommates & the group chat, finally held accountable.',
+    self: true, id: 'house', emoji: '🏠', title: 'House League', blurb: 'Roommates & the group chat, finally held accountable.',
     suggest: 'The Chore Wars', poolHint: 'Everyone in the house or group chat…',
     cats: [c('Cooks for the group', 5), c('Does the dishes unprompted', 3), c('Hits the gym', 2), c('Goes on a date', 5),
       c('Late to plans', -3), c('Bails last minute', -6), c('Texts the ex', -5), c('Leaves a voicemail', 1)],

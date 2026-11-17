@@ -126,6 +126,19 @@ await until(() => E.parsed.size === A.parsed.size, 'full history from relay');
 assert.equal(E.state.phase, 'done');
 assert.deepEqual(standings(E.state).map((r) => r.pk), standings(A.state).map((r) => r.pk));
 assert.equal(E.state.rejected.size, A.state.rejected.size);
+// "draft each other": managers are the player pool, and team size fits the pool
+const S = await createLeague({ name: 'Roomies', me: 'Sam', pin: 'sam-pin', settings: { selfDraft: true, rosterSize: 4, starters: 3 }, cats, pool: [] }, { relays });
+assert.deepEqual([...S.state.pool.values()].map((e) => e.name), ['Sam']);
+const R = await new League(S.code, { relays }).init(); await until(() => R.synced && R.state.exists, 'roomies sync');
+R.login('Rae', 'rae-pin'); await ok(R.act('join', { name: 'Rae' }));
+await until(() => S.state.pool.size === 2, 'joiner becomes draftable');
+await bad(S.act('pool-', { id: [...S.state.pool.keys()][1] }), /draftable/);
+await ok(S.act('pool+', { items: [{ id: 'dog', name: 'The Dog' }, { id: 'ta', name: 'The TA' }, { id: 'x', name: 'Landlord' }] }));
+await ok(S.act('draft.start', { order: [S.me.pk, R.me.pk] }));
+assert.equal(S.state.settings.rosterSize, 2); assert.equal(S.state.settings.starters, 2);   // 5 names / 2 managers
+await ok(S.act('settings', { settings: { selfDraft: false } })); assert.equal(S.state.pool.size, 5);  // locked after the draft starts
+[S, R].forEach((l) => l.close());
+
 // pick timer: once the clock runs out, any manager's client may submit the top available player
 const T = await createLeague({ name: 'Timer', me: 'Tia', pin: 'tia-pin', settings: { rosterSize: 1, starters: 1, pickSecs: 1 }, cats, pool: pool.slice(0, 4) }, { relays });
 const U = await new League(T.code, { relays }).init(); await until(() => U.synced && U.state.exists, 'timer league sync');
