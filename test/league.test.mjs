@@ -132,6 +132,7 @@ const R = await new League(S.code, { relays }).init(); await until(() => R.synce
 R.login('Rae', 'rae-pin'); await ok(R.act('join', { name: 'Rae' }));
 await until(() => S.state.members.length === 2, 'rae joins');
 await bad(R.act('pool+', { items: [{ id: 'dog', name: 'The Dog' }] }), /players are the people/);
+await ok(S.act('settings', { settings: { mode: 'draft' } })); assert.equal(S.state.settings.mode, 'solo');   // type is locked
 await ok(S.act('draft.start', { order: [S.me.pk, R.me.pk] }));
 assert.equal(S.state.phase, 'season'); assert.equal(S.state.round, 1);            // straight into Week 1
 assert.deepEqual([...S.state.pool.values()].map((e) => e.name), ['Sam', 'Rae']);   // only the people in it

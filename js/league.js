@@ -298,8 +298,7 @@ function Settings({ x }) {
   return html`<div class="card"><h3>League rules</h3>
     ${row('Format', odd ? `Odd number of managers: one sits out each ${p}. Points race avoids that.` : s.format === 'h2h' ? `Face a different manager every ${p}. Best record wins.` : 'No matchups — most total points wins.',
     html`<${Seg} value=${s.format} disabled=${!pre} options=${[['h2h', 'Head-to-head'], ['points', 'Points race']]} onChange=${(v) => set({ format: v })} />`)}
-    ${pre && row('Who scores', solo ? 'You do: everyone scores for what they do. No draft.' : 'People you draft: each of you drafts a team from a list.',
-    html`<${Seg} value=${solo ? 'solo' : 'draft'} options=${[['solo', 'We do'], ['draft', 'People we draft']]} onChange=${(v) => set({ mode: v })} />`)}
+    ${row('League type', solo ? 'Everyone scores for what they do. No draft.' : 'Each of you drafts a team from a list.', html`<span class="pill dark">${solo ? '🙋 We score' : '📋 Drafted teams'}</span>`)}
     ${!solo && row(pre ? 'Team size (max)' : 'Team size', pre ? 'Names per team. Shrinks to fit if the list is short.' : 'Names per team.', html`<${Step} value=${s.rosterSize} min=${1} max=${15} disabled=${!pre} onChange=${(v) => set({ rosterSize: v })} />`)}
     ${!solo && row('Starters', s.starters < s.rosterSize ? `Only starters score. ${s.rosterSize - s.starters} on the bench.` : 'Everyone starts — no bench.', html`<${Step} value=${s.starters} min=${1} max=${s.rosterSize} disabled=${!pre} onChange=${(v) => set({ starters: v })} />`)}
     ${row('Scoring period', `What one stretch of the season is called. You start and end each ${p} by hand, so it can be any length.`,

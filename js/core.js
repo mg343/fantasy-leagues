@@ -129,6 +129,7 @@ const H = {
   settings(st, ev, p) {
     if (ev.pk !== st.commish) return 'Only the commissioner can change settings';
     const next = cleanSettings(p.settings, st.settings);
+    next.mode = st.settings.mode; // chosen once at creation, never switched
     if (st.phase !== 'setup') {
       next.rosterSize = st.settings.rosterSize; next.starters = st.settings.starters; next.format = st.settings.format;
       next.selfDraft = st.settings.selfDraft; next.mode = st.settings.mode;

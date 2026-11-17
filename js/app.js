@@ -100,7 +100,7 @@ function Create({ tid }) {
         <input id="mn" class="in" maxlength="24" placeholder="What your friends call you" autocomplete="nickname" value=${me} onInput=${(e) => setMe(e.target.value)} /></div>
       <div style="width:150px"><label class="f" for="pn">PIN</label>
         <input id="pn" class="in" type="password" maxlength="32" placeholder=${`${PIN_MIN}+ characters`} autocomplete="new-password" value=${pin} onInput=${(e) => setPin(e.target.value)} /></div></div>
-      <p class="small muted" style="margin-top:6px">You’ll need your name and PIN to sign in again. There’s no reset.</p>
+      <p class="small muted" style="margin-top:6px">You’ll need your name and PIN to sign in again. There’s no reset. The choice in step 2 can’t be changed later.</p>
       <button class="btn pri big" disabled=${busy}>${busy ? 'Creating…' : 'Create league →'}</button>
       <p class="small muted center">Next you’ll get a link to send your friends.</p>
     </form>
